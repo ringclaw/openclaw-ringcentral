@@ -399,24 +399,16 @@ export function summarizeChatInfo(chat: unknown): string {
 export function summarizeEvent(event: unknown): string {
   if (!event || typeof event !== "object") return "null";
   const e = event as Record<string, unknown>;
-  const body = (e.body && typeof e.body === "object") ? (e.body as Record<string, unknown>) : null;
-  const bodyKeys = body ? Object.keys(body).sort() : [];
+  const body = (e.body && typeof e.body === "object") ? e.body as Record<string, unknown> : null;
   return JSON.stringify({
     event: e.event ?? null,
     subscriptionId: e.subscriptionId ?? null,
-    shape: {
-      hasBody: Boolean(body),
-      bodyKeys: bodyKeys.length > 0 ? bodyKeys.join(",") : null,
-    },
     body: body ? {
       id: body.id ?? null,
       groupId: body.groupId ?? null,
       type: body.type ?? null,
       eventType: body.eventType ?? null,
       creatorId: body.creatorId ?? null,
-      hasText: Boolean(body.text),
-      attachmentCount: Array.isArray(body.attachments) ? (body.attachments as unknown[]).length : null,
-      mentionCount: Array.isArray(body.mentions) ? (body.mentions as unknown[]).length : null,
     } : null,
   });
 }
@@ -596,45 +588,19 @@ async function processMessageWithPipeline(params: {
   const logger = getLogger(core);
   const mediaMaxMb = account.config.mediaMaxMb ?? 20;
 
-  const chatId = String(eventBody.groupId ?? "");
+  const chatId = eventBody.groupId ?? "";
   if (!chatId) return;
 
   const senderId = eventBody.creatorId ?? "";
-
-  // Some WS notifications only include post id/groupId without `text`.
-  // Fetch the full post content before routing (only for PostAdded events).
-  let fullEventBody = eventBody;
-  if (!fullEventBody.text && fullEventBody.id && fullEventBody.eventType === "PostAdded") {
-    try {
-      const mgr = wsManagers.get(account.accountId);
-      const platform = mgr?.sdk?.platform();
-      if (!platform) {
-        logger.warn(`[${account.accountId}] Enrich skipped: sdk/platform not ready (postId=${fullEventBody.id})`);
-      } else {
-        const r = await platform.get(`/restapi/v1.0/glip/posts/${fullEventBody.id}`);
-        const post = await r.json();
-        fullEventBody = { ...fullEventBody, ...post };
-        logger.debug(`[${account.accountId}] Enriched post ${fullEventBody.id} via REST`);
-      }
-    } catch (e) {
-      logger.warn(`[${account.accountId}] Failed to enrich post ${fullEventBody.id}: ${String(e)}`);
-    }
-  }
-
-  const messageText = (fullEventBody.text ?? "").trim();
-  const attachments = fullEventBody.attachments ?? [];
+  const messageText = (eventBody.text ?? "").trim();
+  const attachments = eventBody.attachments ?? [];
   const hasMedia = attachments.length > 0;
   const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
-  if (!rawBody) {
-    logger.warn(
-      `[${account.accountId}] DROP:empty_rawBody (postId=${fullEventBody.id ?? ""} chatId=${chatId} sender=${senderId})`,
-    );
-    return;
-  }
+  if (!rawBody) return;
 
   // Skip bot's own messages to avoid infinite loop
   // Check 1: Skip if this is a message we recently sent
-  const messageId = fullEventBody.id ?? "";
+  const messageId = eventBody.id ?? "";
   if (messageId && isOwnSentMessage(messageId)) {
     logVerbose(core, `skip own sent message: ${messageId}`);
     return;
@@ -736,32 +702,26 @@ async function processMessageWithPipeline(params: {
     : "";
 
   // Map RingCentral chat types to openclaw peerKind:
-  // - Personal/Direct -> "direct" (direct message)
+  // - Personal/Direct -> "dm" (direct message)
   // - Group -> "group" (small group chat, 3-16 people)
   // - Team -> "channel" (named team chat, similar to Slack channel)
-  const peerKind: "direct" | "group" | "channel" = isGroup
+  const peerKind: "dm" | "group" | "channel" = isGroup
     ? chatType === "Team"
       ? "channel"
       : "group"
-    : "direct";
+    : "dm";
 
-  const routePeerId = String(isGroup ? chatId : (dmPeerUserId || chatId));
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
     channel: "ringcentral",
     accountId: account.accountId,
     peer: {
       kind: peerKind,
-      id: routePeerId,
+      id: isGroup ? chatId : (dmPeerUserId || chatId),
     },
   });
 
   logger.debug(`[${account.accountId}] Chat type: ${chatType}, isGroup: ${isGroup}`);
-  logger.debug(
-    `[${account.accountId}] resolvedRoute: channel=ringcentral accountId=${account.accountId}` +
-    ` peerKind=${peerKind} peerId=${routePeerId}` +
-    ` -> agentId=${(route as any)?.agentId ?? "(default)"} matchedBy=${(route as any)?.matchedBy ?? "unknown"}`,
-  );
 
   // In selfOnly mode, only allow "Personal" chat (conversation with yourself)
   if (selfOnly && !isPersonalChat) {
@@ -928,7 +888,7 @@ async function processMessageWithPipeline(params: {
 
   if (isGroup) {
     const requireMention = groupEntry?.requireMention ?? account.config.requireMention ?? true;
-    const mentions = fullEventBody.mentions ?? [];
+    const mentions = eventBody.mentions ?? [];
     const mentionInfo = extractMentionInfo(mentions, account.config.botExtensionId);
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg: config,
@@ -1314,9 +1274,6 @@ async function deliverRingCentralReply(params: {
             postId: typingPostId,
             text: chunk,
           });
-          logger.debug(
-            `[${account.accountId}] RC_POST_UPDATE_OK chatId=${chatId} postId=${typingPostId} len=${chunk.length}`,
-          );
           if (updateResult?.postId) trackSentMessageId(updateResult.postId);
         } else {
           const sendResult = await sendRingCentralMessage({
@@ -1330,9 +1287,6 @@ async function deliverRingCentralReply(params: {
       } catch (err) {
         const errInfo = formatRcApiError(extractRcApiError(err, account.accountId));
         logger.error(`RingCentral message send failed: ${errInfo}`);
-        logger.error(
-          `[${account.accountId}] RC_POST_UPDATE_FAIL chatId=${chatId} typingPostId=${typingPostId ?? ""} chunkIndex=${i} err=${errInfo}`,
-        );
       }
     }
   }

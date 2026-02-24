@@ -54,19 +54,12 @@ describe("summarizeEvent", () => {
     expect(result).toEqual({
       event: "/restapi/v1.0/glip/posts",
       subscriptionId: "sub-456",
-      shape: {
-        hasBody: true,
-        bodyKeys: "creatorId,eventType,groupId,id,mentions,text,type",
-      },
       body: {
         id: "post-1",
         groupId: "group-1",
         type: "TextMessage",
         eventType: "PostAdded",
         creatorId: "user-1",
-        hasText: true,
-        attachmentCount: null,
-        mentionCount: 1,
       },
     });
     expect(result.body.text).toBeUndefined();
@@ -81,11 +74,6 @@ describe("summarizeEvent", () => {
 
   it("handles event without body", () => {
     const result = JSON.parse(summarizeEvent({ event: "/test" }));
-    expect(result).toEqual({
-      event: "/test",
-      subscriptionId: null,
-      shape: { hasBody: false, bodyKeys: null },
-      body: null,
-    });
+    expect(result).toEqual({ event: "/test", subscriptionId: null, body: null });
   });
 });
