@@ -588,19 +588,36 @@ async function processMessageWithPipeline(params: {
   const logger = getLogger(core);
   const mediaMaxMb = account.config.mediaMaxMb ?? 20;
 
-  const chatId = eventBody.groupId ?? "";
+  const chatId = fullEventBody.groupId ?? "";
   if (!chatId) return;
 
   const senderId = eventBody.creatorId ?? "";
-  const messageText = (eventBody.text ?? "").trim();
-  const attachments = eventBody.attachments ?? [];
+
+  // Some WS notifications only include post id/groupId without `text`.
+  // In that case, fetch the full post content before routing.
+  let fullEventBody = eventBody;
+  if (!fullEventBody.text && fullEventBody.id) {
+    try {
+      const platform = runtime.sdk.platform();
+      const r = await platform.get(`/restapi/v1.0/glip/posts/${fullEventBody.id}`);
+      const post = await r.json();
+      // Merge: prefer fetched fields.
+      fullEventBody = { ...fullEventBody, ...post };
+      logger.debug(`[${account.accountId}] Enriched post ${fullEventBody.id} via REST (missing text in WS event)`);
+    } catch (e) {
+      logger.warn(`[${account.accountId}] Failed to enrich post ${fullEventBody.id} via REST: ${String(e)}`);
+    }
+  }
+
+  const messageText = (fullEventBody.text ?? "").trim();
+  const attachments = fullEventBody.attachments ?? [];
   const hasMedia = attachments.length > 0;
   const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
   if (!rawBody) return;
 
   // Skip bot's own messages to avoid infinite loop
   // Check 1: Skip if this is a message we recently sent
-  const messageId = eventBody.id ?? "";
+  const messageId = fullEventBody.id ?? "";
   if (messageId && isOwnSentMessage(messageId)) {
     logVerbose(core, `skip own sent message: ${messageId}`);
     return;
