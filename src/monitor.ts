@@ -65,13 +65,26 @@ export class TtlCache<T> {
   }
 
   set(key: string, value: T): void {
+    // Optimization: Delete key if it exists so re-insertion moves it to the end (MRU).
+    // This ensures Map iteration order remains sorted by expiration time (assuming constant TTL).
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    }
+
     if (this.map.size >= this.maxSize) {
-      // Evict expired entries first
+      // Evict expired entries first.
+      // Optimization: Since map is sorted by insertion/update time, oldest entries are first.
+      // We only need to check from the start until we find a non-expired item.
       const now = Date.now();
       for (const [k, v] of this.map) {
-        if (now > v.expiresAt) this.map.delete(k);
+        if (now > v.expiresAt) {
+          this.map.delete(k);
+        } else {
+          // Found first non-expired item; all subsequent items are newer/later expiry.
+          break;
+        }
       }
-      // If still at capacity, evict oldest entry
+      // If still at capacity after cleaning expired, evict oldest (LRU due to delete-before-set above)
       if (this.map.size >= this.maxSize) {
         const firstKey = this.map.keys().next().value;
         if (firstKey !== undefined) this.map.delete(firstKey);

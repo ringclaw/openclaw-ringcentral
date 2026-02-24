@@ -92,4 +92,18 @@ describe("TtlCache", () => {
     vi.advanceTimersByTime(3_000); // 6s from first set, 3s from refresh
     expect(cache.get("a")).toBe("v2");
   });
+
+  it("updating a key moves it to end (MRU) preventing eviction", () => {
+    const cache = new TtlCache<string>({ maxSize: 2, ttlMs: 60_000 });
+    cache.set("a", "1");
+    cache.set("b", "2");
+
+    cache.set("a", "updated"); // 'a' should now be MRU (newest)
+
+    cache.set("c", "3"); // should evict 'b' (LRU), not 'a'
+
+    expect(cache.get("b")).toBeUndefined();
+    expect(cache.get("a")).toBe("updated");
+    expect(cache.get("c")).toBe("3");
+  });
 });
