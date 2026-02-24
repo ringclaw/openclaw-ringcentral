@@ -588,7 +588,7 @@ async function processMessageWithPipeline(params: {
   const logger = getLogger(core);
   const mediaMaxMb = account.config.mediaMaxMb ?? 20;
 
-  const chatId = fullEventBody.groupId ?? "";
+  const chatId = eventBody.groupId ?? "";
   if (!chatId) return;
 
   const senderId = eventBody.creatorId ?? "";
