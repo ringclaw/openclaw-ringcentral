@@ -1359,6 +1359,9 @@ async function deliverRingCentralReply(params: {
             postId: typingPostId,
             text: chunk,
           });
+          logger.debug(
+            `[${account.accountId}] RC_POST_UPDATE_OK chatId=${chatId} postId=${typingPostId} len=${chunk.length}`,
+          );
           if (updateResult?.postId) trackSentMessageId(updateResult.postId);
         } else {
           const sendResult = await sendRingCentralMessage({
@@ -1372,6 +1375,9 @@ async function deliverRingCentralReply(params: {
       } catch (err) {
         const errInfo = formatRcApiError(extractRcApiError(err, account.accountId));
         logger.error(`RingCentral message send failed: ${errInfo}`);
+        logger.error(
+          `[${account.accountId}] RC_POST_UPDATE_FAIL chatId=${chatId} typingPostId=${typingPostId ?? ""} chunkIndex=${i} err=${errInfo}`,
+        );
       }
     }
   }
