@@ -626,7 +626,12 @@ async function processMessageWithPipeline(params: {
   const attachments = fullEventBody.attachments ?? [];
   const hasMedia = attachments.length > 0;
   const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
-  if (!rawBody) return;
+  if (!rawBody) {
+    logger.warn(
+      `[${account.accountId}] DROP:empty_rawBody (postId=${fullEventBody.id ?? ""} chatId=${chatId} sender=${senderId})`,
+    );
+    return;
+  }
 
   // Skip bot's own messages to avoid infinite loop
   // Check 1: Skip if this is a message we recently sent
@@ -918,7 +923,7 @@ async function processMessageWithPipeline(params: {
 
   if (isGroup) {
     const requireMention = groupEntry?.requireMention ?? account.config.requireMention ?? true;
-    const mentions = eventBody.mentions ?? [];
+    const mentions = fullEventBody.mentions ?? [];
     const mentionInfo = extractMentionInfo(mentions, account.config.botExtensionId);
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg: config,
