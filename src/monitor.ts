@@ -601,7 +601,7 @@ async function processMessageWithPipeline(params: {
   const logger = getLogger(core);
   const mediaMaxMb = account.config.mediaMaxMb ?? 20;
 
-  const chatId = eventBody.groupId ?? "";
+  const chatId = String(eventBody.groupId ?? "");
   if (!chatId) return;
 
   const senderId = eventBody.creatorId ?? "";
@@ -791,7 +791,7 @@ async function processMessageWithPipeline(params: {
       : "group"
     : "dm";
 
-  const routePeerId = isGroup ? chatId : (dmPeerUserId || chatId);
+  const routePeerId = String(isGroup ? chatId : (dmPeerUserId || chatId));
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
     channel: "ringcentral",
