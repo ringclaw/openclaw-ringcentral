@@ -152,12 +152,16 @@ if [ -f "$OPENCLAW_CONFIG" ]; then
         const fs = require('fs');
         const cfg = JSON.parse(fs.readFileSync('$OPENCLAW_CONFIG', 'utf8'));
         
-        // Remove plugin entries and installs
+        // Remove plugin entries, installs, and allow references
         if (cfg.plugins?.entries?.['$PLUGIN_NAME']) {
             delete cfg.plugins.entries['$PLUGIN_NAME'];
         }
         if (cfg.plugins?.installs?.['$PLUGIN_NAME']) {
             delete cfg.plugins.installs['$PLUGIN_NAME'];
+        }
+        if (Array.isArray(cfg.plugins?.allow)) {
+            cfg.plugins.allow = cfg.plugins.allow.filter(p => p !== '$PLUGIN_NAME');
+            if (cfg.plugins.allow.length === 0) delete cfg.plugins.allow;
         }
         
         // Temporarily remove ringcentral channel config
@@ -188,6 +192,21 @@ if [ -n "$CREDENTIALS_BACKUP" ] && [ "$CREDENTIALS_BACKUP" != "" ]; then
             credentials: credentials
         };
         
+        fs.writeFileSync('$OPENCLAW_CONFIG', JSON.stringify(cfg, null, 2));
+    "
+fi
+
+# Ensure plugin is in plugins.allow
+if [ -f "$OPENCLAW_CONFIG" ]; then
+    echo "Ensuring $PLUGIN_NAME is in plugins.allow..."
+    node -e "
+        const fs = require('fs');
+        const cfg = JSON.parse(fs.readFileSync('$OPENCLAW_CONFIG', 'utf8'));
+        if (!cfg.plugins) cfg.plugins = {};
+        if (!Array.isArray(cfg.plugins.allow)) cfg.plugins.allow = [];
+        if (!cfg.plugins.allow.includes('$PLUGIN_NAME')) {
+            cfg.plugins.allow.push('$PLUGIN_NAME');
+        }
         fs.writeFileSync('$OPENCLAW_CONFIG', JSON.stringify(cfg, null, 2));
     "
 fi
