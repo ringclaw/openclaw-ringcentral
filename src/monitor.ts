@@ -693,7 +693,7 @@ async function processMessageWithPipeline(params: {
   let chatInfoLookupOk = false;
   try {
     chatInfo = await getCachedChat(account, chatId);
-    chatInfoLookupOk = true;
+    chatInfoLookupOk = Boolean(chatInfo && (chatInfo as any).type);
     chatType = chatInfo?.type ?? "Group";
     chatName = chatInfo?.name ?? undefined;
 
@@ -705,11 +705,13 @@ async function processMessageWithPipeline(params: {
     logger.error(`[${account.accountId}] getRingCentralChat failed: ${String(err)}`);
   }
 
-  // If chatInfo lookup failed, fall back to DM to preserve expected routing for configured DMs.
-  // (Misclassifying a DM as group would prevent dm routing to the lead agent.)
+  // If chatInfo lookup failed (throws OR returned null/invalid), fall back to DM to preserve expected routing.
+  // Misclassifying a DM as group would prevent dm routing to the lead agent.
   if (!chatInfoLookupOk) {
     chatType = "Personal";
-    logger.warn(`[${account.accountId}] chatInfo lookup failed; fallback chatType=Personal for routing (chatId=${chatId})`);
+    logger.warn(
+      `[${account.accountId}] chatInfo missing/invalid; fallback chatType=Personal for routing (chatId=${chatId})`,
+    );
   }
 
   // Personal, PersonalChat, Direct are all DM types
