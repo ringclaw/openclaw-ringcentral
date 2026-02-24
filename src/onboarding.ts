@@ -9,6 +9,7 @@ import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  mergeAllowFromEntries,
   promptChannelAccessConfig,
 } from "openclaw/plugin-sdk";
 
@@ -109,9 +110,10 @@ async function promptRingCentralAllowFrom(params: {
       continue;
     }
 
-    const unique = [
-      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...parts]),
-    ];
+    const unique = mergeAllowFromEntries(
+      existing.map((v) => String(v).trim()).filter(Boolean),
+      parts,
+    );
     return setRingCentralAllowFrom(params.cfg, unique);
   }
 }

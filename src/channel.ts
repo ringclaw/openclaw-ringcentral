@@ -8,8 +8,10 @@ import {
   missingTargetError,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
+  resolveAllowlistProviderRuntimeGroupPolicy,
   resolveChannelMediaMaxBytes,
   resolveChannelGroupToolsPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelDock,
   type ChannelPlugin,
@@ -49,6 +51,13 @@ const formatAllowFromEntry = (entry: string) =>
     .replace(/^user:/i, "")
     .toLowerCase();
 
+export function normalizeRingCentralAllowFromEntries(allowFrom: (string | number)[]): string[] {
+  return allowFrom
+    .map((entry) => String(entry))
+    .filter(Boolean)
+    .map(formatAllowFromEntry);
+}
+
 export const ringcentralDock: ChannelDock = {
   id: "ringcentral",
   capabilities: {
@@ -64,11 +73,7 @@ export const ringcentralDock: ChannelDock = {
       (resolveRingCentralAccount({ cfg: cfg as OpenClawConfig, accountId }).config.dm?.allowFrom ??
         []
       ).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry))
-        .filter(Boolean)
-        .map(formatAllowFromEntry),
+    formatAllowFrom: ({ allowFrom }) => normalizeRingCentralAllowFromEntries(allowFrom),
   },
   groups: {
     resolveRequireMention: ({ cfg, accountId }) => {
@@ -180,11 +185,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
         accountId,
       }).config.dm?.allowFrom ?? []
       ).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry))
-        .filter(Boolean)
-        .map(formatAllowFromEntry),
+    formatAllowFrom: ({ allowFrom }) => normalizeRingCentralAllowFromEntries(allowFrom),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -205,12 +206,24 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: (cfg as OpenClawConfig).channels?.ringcentral !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy === "open") {
-        warnings.push(
-          `- RingCentral chats: groupPolicy="open" allows any chat to trigger (mention-gated). Set channels.ringcentral.groupPolicy="allowlist" and configure channels.ringcentral.groups.`,
-        );
+        const groupAllowlistConfigured =
+          Boolean(account.config.groups) && Object.keys(account.config.groups ?? {}).length > 0;
+        if (groupAllowlistConfigured) {
+          warnings.push(
+            `- RingCentral chats: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set channels.ringcentral.groupPolicy="allowlist" and configure channels.ringcentral.groups.`,
+          );
+        } else {
+          warnings.push(
+            `- RingCentral chats: groupPolicy="open" with no channels.ringcentral.groups allowlist; any group can trigger (mention-gated). Set channels.ringcentral.groupPolicy="allowlist" and configure channels.ringcentral.groups.`,
+          );
+        }
       }
       if (account.config.dm?.policy === "open") {
         warnings.push(

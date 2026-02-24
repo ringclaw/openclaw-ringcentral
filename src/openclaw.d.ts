@@ -587,6 +587,7 @@ declare module "openclaw/plugin-sdk" {
 
   // Onboarding helper functions
   export function addWildcardAllowFrom(allowFrom?: (string | number)[]): (string | number)[] | undefined;
+  export function mergeAllowFromEntries(existing: string[] | undefined, added: string[]): string[];
   export function formatDocsLink(path: string, label: string): string;
   export function promptChannelAccessConfig(params: {
     prompter: WizardPrompter;
@@ -608,4 +609,47 @@ declare module "openclaw/plugin-sdk" {
     senderUsername?: string | null;
     senderE164?: string | null;
   }): GroupToolPolicyConfig | undefined;
+
+  // Runtime group policy (fail-closed)
+  export type RuntimeGroupPolicyResolution = {
+    groupPolicy: GroupPolicy;
+    providerMissingFallbackApplied: boolean;
+  };
+
+  export type ResolveProviderRuntimeGroupPolicyParams = {
+    providerConfigPresent: boolean;
+    groupPolicy?: GroupPolicy;
+    defaultGroupPolicy?: GroupPolicy;
+  };
+
+  export type GroupPolicyDefaultsConfig = {
+    channels?: {
+      defaults?: {
+        groupPolicy?: GroupPolicy;
+      };
+    };
+  };
+
+  export function resolveDefaultGroupPolicy(cfg: GroupPolicyDefaultsConfig): GroupPolicy | undefined;
+
+  export function resolveAllowlistProviderRuntimeGroupPolicy(
+    params: ResolveProviderRuntimeGroupPolicyParams,
+  ): RuntimeGroupPolicyResolution;
+
+  export function resolveOpenProviderRuntimeGroupPolicy(
+    params: ResolveProviderRuntimeGroupPolicyParams,
+  ): RuntimeGroupPolicyResolution;
+
+  export function warnMissingProviderGroupPolicyFallbackOnce(params: {
+    providerMissingFallbackApplied: boolean;
+    providerKey: string;
+    accountId?: string;
+    blockedLabel?: string;
+    log: (message: string) => void;
+  }): boolean;
+
+  // Dangerous name matching
+  export function isDangerousNameMatchingEnabled(
+    config: { dangerouslyAllowNameMatching?: boolean } | null | undefined,
+  ): boolean;
 }

@@ -6,7 +6,12 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveMentionGatingWithBypass,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk";
 
 import type { ResolvedRingCentralAccount } from "./accounts.js";
 import { getRingCentralSDK } from "./auth.js";
@@ -582,8 +587,19 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const { groupPolicy, providerMissingFallbackApplied } = resolveAllowlistProviderRuntimeGroupPolicy({
+    providerConfigPresent: config.channels?.ringcentral !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy,
+  });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "ringcentral",
+    accountId: account.accountId,
+    blockedLabel: "group/team messages",
+    log: (msg) => logger.warn(msg),
+  });
   const groupConfigResolved = resolveGroupConfig({
     groupId: chatId,
     groupName: chatName ?? null,

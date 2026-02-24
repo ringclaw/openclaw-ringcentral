@@ -79,6 +79,8 @@ const RingCentralAccountSchemaBase = z
     botExtensionId: z.string().optional(),
     selfOnly: z.boolean().optional(),
     useAdaptiveCards: z.boolean().optional(),
+    // Security
+    dangerouslyAllowNameMatching: z.boolean().optional(),
     // Threading
     replyToMode: z.enum(["off", "all"]).optional(),
     // Actions configuration

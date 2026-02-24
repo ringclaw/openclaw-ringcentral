@@ -276,6 +276,7 @@ export type RingCentralAccountConfig = {
   replyToMode?: "off" | "all";
   selfOnly?: boolean; // JWT mode: only accept messages from the JWT user in Personal chat (default: true)
   useAdaptiveCards?: boolean; // Use Adaptive Cards for messages with code blocks (default: false)
+  dangerouslyAllowNameMatching?: boolean; // Allow name-based allowFrom matching (insecure, default: false)
   workspace?: string; // Path to workspace for storing group chat messages
   actions?: RingCentralActionsConfig; // Action permissions for message operations
 };
