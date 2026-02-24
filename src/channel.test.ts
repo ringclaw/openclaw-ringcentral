@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 // Test the stripPatterns function

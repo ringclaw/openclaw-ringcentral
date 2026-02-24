@@ -248,7 +248,7 @@ export const ringcentralOnboarding: ChannelOnboardingAdapter = {
           ...next,
           channels: {
             ...next.channels,
-            ringcentral: { ...(next.channels?.ringcentral ?? {}), enabled: true },
+            ringcentral: { ...next.channels?.ringcentral, enabled: true },
           },
         };
       } else {
@@ -347,7 +347,7 @@ export const ringcentralOnboarding: ChannelOnboardingAdapter = {
         channels: {
           ...next.channels,
           ringcentral: {
-            ...(next.channels?.ringcentral ?? {}),
+            ...next.channels?.ringcentral,
             enabled: true,
             credentials: {
               clientId,
@@ -408,7 +408,7 @@ export const ringcentralOnboarding: ChannelOnboardingAdapter = {
     channels: {
       ...cfg.channels,
       ringcentral: {
-        ...(cfg.channels?.ringcentral ?? {}),
+        ...cfg.channels?.ringcentral,
         enabled: false,
       },
     },

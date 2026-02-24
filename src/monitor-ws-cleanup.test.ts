@@ -27,12 +27,13 @@ describe("Subscription listener leak on subscribe failure", () => {
       close: vi.fn(),
     };
 
-    let subscriptionInfo: { id: string } | undefined;
+    // oxlint-disable-next-line no-unassigned-vars -- intentionally unassigned to reproduce crash
+    let _subscriptionInfo: { id: string } | undefined;
 
     // Simulates the listener registered in Subscription constructor
-    const eventListener = (mEvent: unknown) => {
+    const eventListener = (_mEvent: unknown) => {
       // This line is the exact crash site from subscription.js:22
-      const _id = subscriptionInfo!.id;
+      const _id = _subscriptionInfo!.id;
     };
     fakeWs.addEventListener("message", eventListener);
 

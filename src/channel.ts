@@ -444,7 +444,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
           channels: {
             ...next.channels,
             ringcentral: {
-              ...(next.channels?.ringcentral ?? {}),
+              ...next.channels?.ringcentral,
               enabled: true,
               ...configPatch,
             },
@@ -456,12 +456,12 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
         channels: {
           ...next.channels,
           ringcentral: {
-            ...(next.channels?.ringcentral ?? {}),
+            ...next.channels?.ringcentral,
             enabled: true,
             accounts: {
-              ...(next.channels?.ringcentral?.accounts ?? {}),
+              ...next.channels?.ringcentral?.accounts,
               [accountId]: {
-                ...(next.channels?.ringcentral?.accounts?.[accountId] ?? {}),
+                ...(next.channels?.ringcentral?.accounts?.[accountId] as Record<string, unknown> | undefined),
                 enabled: true,
                 ...configPatch,
               },
@@ -607,7 +607,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
     probeAccount: async ({ account }) => probeRingCentral(account),
-    auditAccount: async ({ account, cfg, timeoutMs }) => {
+    auditAccount: async ({ account, cfg: _cfg, timeoutMs }) => {
       const groups = account.config.groups ?? {};
       const groupIds = Object.keys(groups).filter((k) => k !== "*");
 

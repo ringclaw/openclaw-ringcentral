@@ -597,7 +597,7 @@ async function processMessageWithPipeline(params: {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   ownerId?: string;
 }): Promise<void> {
-  const { eventBody, account, config, runtime, core, statusSink, ownerId } = params;
+  const { eventBody, account, config, core, statusSink, ownerId } = params;
   const logger = getLogger(core);
   const mediaMaxMb = account.config.mediaMaxMb ?? 20;
 
@@ -1421,7 +1421,7 @@ export async function startRingCentralMonitor(
   ];
 
   // Subscribe once — autoRecover will restore the subscription on reconnect
-  const wsSubscription = await mgr.wsExt.subscribe(eventFilters, handleNotification);
+  await mgr.wsExt.subscribe(eventFilters, handleNotification);
   mgr.subscribed = true;
 
   logger.info(

@@ -57,6 +57,7 @@ export function toRingCentralMarkdown(text: string): string {
   result = result.replace(/^(\s*)[-+]\s+/gm, "$1* ");
 
   // 9. Restore links
+  // oxlint-disable-next-line no-control-regex -- intentional NUL placeholder
   result = result.replace(/\x00LINK_(\d+)\x00/g, (_match, idx) => {
     return linkPlaceholders[Number(idx)];
   });

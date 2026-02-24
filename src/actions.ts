@@ -20,7 +20,7 @@ import {
   updateRingCentralNote,
   publishRingCentralNote,
 } from "./api.js";
-import type { RingCentralPost, RingCentralAttachment, RingCentralMention, RingCentralTask, RingCentralEvent, RingCentralNote } from "./types.js";
+import type { RingCentralPost, RingCentralTask, RingCentralEvent, RingCentralNote } from "./types.js";
 import { normalizeRingCentralTarget } from "./targets.js";
 
 export type RingCentralActionClientOpts = {
@@ -285,7 +285,7 @@ export async function completeRingCentralTaskAction(
   },
 ): Promise<void> {
   const account = getAccount(opts);
-  const targetChatId = normalizeTarget(chatId);
+  normalizeTarget(chatId);
 
   await completeRingCentralTask({
     account,
@@ -308,7 +308,7 @@ export async function updateRingCentralTaskAction(
   },
 ): Promise<{ taskId?: string }> {
   const account = getAccount(opts);
-  const targetChatId = normalizeTarget(chatId);
+  normalizeTarget(chatId);
 
   const result = await updateRingCentralTask({
     account,
@@ -428,7 +428,7 @@ export async function updateRingCentralEventAction(
   },
 ): Promise<{ eventId?: string }> {
   const account = getAccount(opts);
-  const targetChatId = normalizeTarget(chatId);
+  normalizeTarget(chatId);
 
   const result = await updateRingCentralEvent({
     account,
@@ -454,7 +454,7 @@ export async function deleteRingCentralEventAction(
   opts: RingCentralActionClientOpts,
 ): Promise<void> {
   const account = getAccount(opts);
-  const targetChatId = normalizeTarget(chatId);
+  normalizeTarget(chatId);
 
   await deleteRingCentralEvent({
     account,

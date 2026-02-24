@@ -57,18 +57,18 @@ type ChannelMessageActionContext = {
   accountId?: string | null;
 };
 
-type AgentToolResult<T> = {
+type AgentToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
 };
 
-function jsonResult<T>(data: T): AgentToolResult<T> {
+function jsonResult<T>(data: T): AgentToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
   };
 }
 
-function errorResult(message: string): AgentToolResult<unknown> {
+function errorResult(message: string): AgentToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify({ error: message }) }],
     isError: true,
@@ -121,7 +121,7 @@ function resolveChannelId(params: Record<string, unknown>): string {
 export type RingCentralMessageActionAdapter = {
   listActions: (params: { cfg: OpenClawConfig }) => RingCentralActionName[];
   supportsAction: (params: { action: string }) => boolean;
-  handleAction: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
+  handleAction: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult>;
 };
 
 export const ringcentralMessageActions: RingCentralMessageActionAdapter = {

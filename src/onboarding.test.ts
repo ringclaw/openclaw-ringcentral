@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 describe("ringcentralOnboarding", () => {
   let ringcentralOnboarding: typeof import("./onboarding.js").ringcentralOnboarding;
