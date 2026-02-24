@@ -163,14 +163,8 @@ const INBOUND_DEDUP_TTL_MS = 2 * 60_000; // 2 minutes
 const INBOUND_DEDUP_MAX_SIZE = 500;
 const inboundDedupCache = new TtlCache<true>({ maxSize: INBOUND_DEDUP_MAX_SIZE, ttlMs: INBOUND_DEDUP_TTL_MS });
 
-// Reconnection settings
-const RECONNECT_INITIAL_DELAY = 5000; // 5 seconds
-const RECONNECT_MAX_DELAY = 300000; // 5 minutes
-const RATE_LIMIT_BACKOFF = 60000; // 1 minute backoff on 429
-
-// Health check / watchdog settings
+// Health check / watchdog settings (supplements autoRecover's pingServer)
 const HEALTH_CHECK_INTERVAL_MS = 30_000; // check every 30s
-const INBOUND_STALE_THRESHOLD_MS = 5 * 60_000; // 5 minutes no inbound → force reconnect
 const SLEEP_DRIFT_THRESHOLD_MS = 10_000; // >10s timer drift → system likely slept
 
 /**
@@ -223,8 +217,13 @@ async function getOrCreateWsManager(
   await (subscriptions as any).init?.();
 
   const wsExt = new WebSocketExtension({
-    debugMode: true,
-    autoRecover: { enabled: false },
+    debugMode: false,
+    autoRecover: {
+      enabled: true,
+      // Exponential backoff: 5s, 10s, 20s, 40s, …, capped at 5min
+      checkInterval: (retries: number) => Math.min(5000 * Math.pow(2, retries), 300_000),
+      pingServerInterval: 60_000,
+    },
   });
 
   const rc = (subscriptions as any).rc;
@@ -1299,331 +1298,118 @@ export async function startRingCentralMonitor(
   const core = getRingCentralRuntime();
   const logger = createLogger(core);
 
-  let wsSubscription: Awaited<ReturnType<ReturnType<InstanceType<typeof Subscriptions>["createSubscription"]>["register"]>> | null = null;
-  let reconnectAttempts = 0;
-  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   let isShuttingDown = false;
-  let isReconnecting = false;
   let ownerId: string | undefined;
 
   // Observability state
   let lastInboundAt = 0;
-  let lastReconnectAt = 0;
-  let totalReconnects = 0;
+  let totalRecovers = 0;
   let lastHealthCheckWallClock = Date.now();
 
-  // Avoid hammering /oauth/wstoken (auth rate limit is very low, e.g. 5/min).
-  let nextAllowedWsConnectAt = 0;
+  // ── Step 1: Resolve ownerId before subscribing ──
+  // Prefer local config (no network) to avoid rate limiting.
+  const allowFrom =
+    (account.config.dm?.allowFrom ?? account.config.allowFrom ?? []).map((v) => String(v));
+  const allowFromFirst = allowFrom[0]?.trim();
+  if (allowFromFirst) {
+    ownerId = allowFromFirst;
+    logger.debug(`[${account.accountId}] ownerId set from config allowFrom[0]: ${ownerId}`);
+  }
 
-  // Calculate delay with exponential backoff + jitter
-  const getReconnectDelay = () => {
-    const base = Math.min(
-      RECONNECT_INITIAL_DELAY * Math.pow(2, reconnectAttempts),
-      RECONNECT_MAX_DELAY,
-    );
-    // Add ±25% jitter to avoid thundering herd
-    const jitter = base * 0.25 * (Math.random() * 2 - 1);
-    return Math.max(1000, Math.floor(base + jitter));
-  };
+  // ── Step 2: Create WS manager + connect + subscribe (once) ──
+  logger.info(`[${account.accountId}] Starting RingCentral WebSocket subscription...`);
 
-  // Create and setup subscription
-  const createSubscription = async (): Promise<void> => {
-    if (isShuttingDown || abortSignal.aborted) return;
+  const mgr = await getOrCreateWsManager(account, logger);
+  await ensureWsConnected(mgr, account, logger);
 
-    logger.info(`[${account.accountId}] Starting RingCentral WebSocket subscription...`);
-
-    if (Date.now() < nextAllowedWsConnectAt) {
-      const waitMs = nextAllowedWsConnectAt - Date.now();
-      logger.warn(
-        `[${account.accountId}] WS connect is rate-limited locally; will retry in ${Math.ceil(waitMs / 1000)}s`,
-      );
-      scheduleReconnect();
-      return;
-    }
-
-    if (Date.now() < nextAllowedWsConnectAt) {
-      const waitMs = nextAllowedWsConnectAt - Date.now();
-      logger.warn(
-        `[${account.accountId}] WS connect is rate-limited locally; will retry in ${Math.ceil(waitMs / 1000)}s`,
-      );
-      scheduleReconnect();
-      return;
-    }
-
+  // Resolve ownerId from REST if not configured
+  if (!ownerId) {
     try {
-      // Get or create WS manager (singleton per account)
-      const mgr = await getOrCreateWsManager(account, logger);
-
-      // Force connect once per account (with in-flight de-dupe)
-      await ensureWsConnected(mgr, account, logger);
-
-      const subscription = mgr.subscriptions.createSubscription();
-
-      // IMPORTANT: @ringcentral/subscriptions will create *its own* WS extension instance internally
-      // when calling subscription.register(), which can still lead to `wse.ws` undefined and
-      // addEventListener crash. We bypass it by using our singleton wsExt directly.
-      // We'll keep `subscription` object for event emitter convenience, but registration uses wsExt.
-
-
-      // Extra diagnostics: log versions so we can pin a working combo.
-      try {
-        // @ts-ignore - dynamic import of package.json for version logging
-        const sdkVer = (await import("@ringcentral/sdk/package.json", { with: { type: "json" } } as any))?.default?.version;
-        // @ts-ignore - dynamic import of package.json for version logging
-        const subsVer = (await import("@ringcentral/subscriptions/package.json", { with: { type: "json" } } as any))?.default?.version;
-        logger.debug(`[${account.accountId}] rc sdk versions: @ringcentral/sdk=${sdkVer} @ringcentral/subscriptions=${subsVer}`);
-      } catch {
-        // ignore
-      }
-
-      // Determine ownerId (the JWT user's extension id) for self-message filtering.
-      // Prefer local config (no network) to avoid rate limiting.
-      // Fallback to REST only when needed.
-      if (!ownerId) {
-        const allowFrom =
-          (account.config.dm?.allowFrom ?? account.config.allowFrom ?? []).map((v) => String(v));
-        const allowFromFirst = allowFrom[0]?.trim();
-
-        // If allowFrom[0] is configured, treat it as the current user id.
-        // (This is consistent with your setup where you put your own id in allowFrom.)
-        if (allowFromFirst) {
-          ownerId = allowFromFirst;
-          logger.debug(`[${account.accountId}] ownerId set from config allowFrom[0]: ${ownerId}`);
-        }
-      }
-
-      // Fallback: query current extension via REST (may be rate-limited)
-      if (!ownerId) {
-        try {
-          const platform = mgr.sdk.platform();
-          const response = await platform.get("/restapi/v1.0/account/~/extension/~");
-          const userInfo = await response.json();
-          ownerId = userInfo?.id?.toString();
-          logger.info(`[${account.accountId}] Authenticated as extension (REST): ${ownerId}`);
-        } catch (err) {
-          const msg = String(err);
-          logger.error(
-            `[${account.accountId}] Failed to get current user (REST, best-effort): ${msg}. ` +
-            `Continuing without ownerId; self-message filtering may be degraded temporarily.`,
-          );
-          // Backoff a bit to avoid hammering
-          nextAllowedWsConnectAt = Date.now() + 60_000;
-        }
-      }
-
-      // Handle notifications
-      subscription.on(subscription.events.notification, (event: unknown) => {
-        logger.debug(`WebSocket notification received: ${summarizeEvent(event)}`);
-        lastInboundAt = Date.now();
-        const evt = event as RingCentralWebhookEvent;
-        processWebSocketEvent({
-          event: evt,
-          account,
-          config,
-          runtime,
-          core,
-          statusSink,
-          ownerId,
-        }).catch((err) => {
-          logger.error(`[${account.accountId}] WebSocket event processing failed: ${String(err)}`);
-        });
-      });
-
-      // Subscribe to Team Messaging events and save WsSubscription for cleanup
-      // IMPORTANT:
-      // We use Team Messaging API (/team-messaging/v1/...) for fetching chats/persons.
-      // So our push subscription should also follow Team Messaging event filters.
-      // The older /glip/* filters can yield 404s depending on account/permissions and
-      // can break inbound processing.
-      const eventFilters = [
-        "/restapi/v1.0/glip/posts",
-        "/restapi/v1.0/glip/groups",
-      ];
-
-      // Register subscription via singleton wsExt (NOT via @ringcentral/subscriptions.register()).
-      // This avoids newWsExtension() being created per call.
-      wsSubscription = await mgr.wsExt.subscribe(eventFilters, (event: unknown) => {
-        subscription.emit(subscription.events.notification, event);
-      });
-
-      logger.info(
-        `[${account.accountId}] RingCentral WebSocket subscription established` +
-        ` | totalReconnects=${totalReconnects}` +
-        ` | lastInboundAt=${lastInboundAt ? new Date(lastInboundAt).toISOString() : "never"}`,
-      );
-      reconnectAttempts = 0; // Reset backoff on success
-      isReconnecting = false;
-
-      // Setup WebSocket close/error handlers for auto-reconnect
-      const ws = mgr.wsExt.ws;
-      if (ws) {
-        const handleWsClose = (event: { code?: number; reason?: string } | Event) => {
-          if (isShuttingDown || abortSignal.aborted) return;
-          const closeEvent = event as { code?: number; reason?: string };
-          logger.warn(
-            `[${account.accountId}] WebSocket closed unexpectedly. ` +
-            `code=${closeEvent.code ?? "unknown"} reason=${closeEvent.reason ?? "none"}. ` +
-            `Scheduling reconnect...`,
-          );
-          // Clear WsManager cache to force fresh connection
-          wsManagers.delete(account.accountId);
-          scheduleReconnect();
-        };
-
-        const handleWsError = (event: unknown) => {
-          if (isShuttingDown || abortSignal.aborted) return;
-          const errEvent = event as { message?: string };
-          const errMsg = errEvent?.message ?? "WebSocket error";
-          logger.error(`[${account.accountId}] WebSocket error: ${errMsg}`);
-          // Error usually followed by close, so we don't reconnect here directly
-        };
-
-        ws.addEventListener("close", handleWsClose);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (ws as any).addEventListener("error", handleWsError);
-
-        logger.debug(`[${account.accountId}] WebSocket close/error handlers registered`);
-      }
-
+      const platform = mgr.sdk.platform();
+      const response = await platform.get("/restapi/v1.0/account/~/extension/~");
+      const userInfo = await response.json();
+      ownerId = userInfo?.id?.toString();
+      logger.info(`[${account.accountId}] Authenticated as extension (REST): ${ownerId}`);
     } catch (err) {
-      // ── Clean up leaked subscription listener ──
-      // @rc-ex/ws Subscription constructor registers a message listener on ws
-      // BEFORE subscribe() completes.  If subscribe() fails the listener
-      // remains attached and will crash on this.subscriptionInfo.id (undefined)
-      // when the next WS message arrives.  Close the underlying ws and discard
-      // the WsManager so the reconnect path creates a fresh connection.
-      const failedMgr = wsManagers.get(account.accountId);
-      if (failedMgr?.wsExt?.ws) {
-        try { failedMgr.wsExt.ws.close(); } catch { /* ignore */ }
-      }
-      wsManagers.delete(account.accountId);
-
-      // ── 429 rate-limit from /oauth/wstoken ──
-      // WsTokenRateLimitError is thrown by ensureWsConnected() when the
-      // underlying wsExt.connect() gets a 429.
-      if (err instanceof WsTokenRateLimitError) {
-        const backoffMs = err.retryAfterMs;
-        nextAllowedWsConnectAt = Date.now() + backoffMs;
-        logger.error(err.message);
-        scheduleReconnect(true);
-        throw err; // propagate so caller knows requests are paused
-      }
-
-      const e = err as any;
-      const errStr = String(err);
-      const msg = e?.stack ? String(e.stack) : errStr;
-
-      // Check for missing WebSocket Subscriptions permission (SUB-528)
-      const isMissingWsPerm = errStr.includes("SUB-528") || errStr.includes("SubscriptionWebSocket");
-      if (isMissingWsPerm) {
-        logger.error(
-          `[${account.accountId}] RingCentral app is missing the "WebSocket Subscriptions" permission. ` +
-          `Go to https://developers.ringcentral.com → your app → Settings → "App Permissions" and enable "WebSocket Subscriptions", ` +
-          `then re-authorize. No WebSocket push will be received until this is fixed.`,
-        );
-        return;
-      }
-
-      // Check for auth errors - don't retry on auth failures
-      const isAuthError = errStr.includes("401") || errStr.includes("Unauthorized") || errStr.includes("invalid_grant");
-      if (isAuthError) {
-        logger.error(`[${account.accountId}] Authentication failed. Please check your credentials.`);
-        return;
-      }
-
-      // Legacy fallback: detect rate-limit from errors not wrapped by ensureWsConnected
-      // (e.g. from wsExt.subscribe or other SDK calls).
-      const retryAfterHeader =
-        typeof e?.response?.headers?.get === "function" ? e.response.headers.get("retry-after") :
-          typeof e?.response?.headers?.["retry-after"] === "string" ? e.response.headers["retry-after"] :
-            undefined;
-      const retryAfterMs =
-        typeof e?.retryAfter === "number" ? e.retryAfter :
-          (retryAfterHeader ? (parseInt(retryAfterHeader, 10) * 1000) : undefined);
-
-      const isRateLimited = e?.message === "Request rate exceeded" || e?.response?.status === 429 ||
-        errStr.includes("429") || errStr.includes("rate") || errStr.includes("Rate");
-
-      if (isRateLimited) {
-        const backoffMs = Number.isFinite(retryAfterMs) && retryAfterMs! > 0 ? retryAfterMs! : 60000;
-        nextAllowedWsConnectAt = Date.now() + backoffMs;
-        logger.error(
-          `[${account.accountId}] WS connect failed due to rate limit (wstoken). ` +
-          `Backing off for ${Math.ceil(backoffMs / 1000)}s before retrying.`,
-        );
-      }
-
       logger.error(
-        `[default] WS subscription failed (NO WS push will be received until fixed). ` +
-        `accountId=${account.accountId}. ` +
-        `Reason=${e?.name ?? 'Error'}: ${e?.message ?? errStr}\n` +
-        `Where=createSubscription()->wsExt.subscribe()\n` +
-        `LikelyCause: underlying WebSocket object does not implement addEventListener (required by @rc-ex/ws), OR ws connect failed earlier and was swallowed.\n` +
-        `EventFilters=${JSON.stringify([
-          "/restapi/v1.0/glip/posts",
-          "/restapi/v1.0/glip/groups",
-        ])}\n` +
-        `Stack:\n${msg}`,
+        `[${account.accountId}] Failed to get current user (REST, best-effort): ${String(err)}. ` +
+        `Continuing without ownerId; self-message filtering may be degraded temporarily.`,
       );
-      scheduleReconnect(isRateLimited);
-    }
-  };
-
-  // Schedule reconnection with exponential backoff
-  const scheduleReconnect = (isRateLimited = false) => {
-    if (isShuttingDown || abortSignal.aborted) return;
-    if (isReconnecting) return; // prevent overlapping reconnect attempts
-    isReconnecting = true;
-
-    // No max attempts cap -- always try to recover
-    const baseDelay = isRateLimited ? RATE_LIMIT_BACKOFF : getReconnectDelay();
-    const delay = Math.min(baseDelay, RECONNECT_MAX_DELAY);
-    reconnectAttempts++;
-    totalReconnects++;
-    lastReconnectAt = Date.now();
-
-    logger.warn(
-      `[${account.accountId}] Scheduling reconnect #${reconnectAttempts} in ${Math.ceil(delay / 1000)}s` +
-      `${isRateLimited ? " (rate limited)" : ""}` +
-      ` | totalReconnects=${totalReconnects}` +
-      ` | lastInboundAt=${lastInboundAt ? new Date(lastInboundAt).toISOString() : "never"}`,
-    );
-
-    // Clean up existing WsSubscription
-    if (wsSubscription) {
-      wsSubscription.revoke().catch(() => { });
-      wsSubscription = null;
-    }
-
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout);
-    }
-
-    reconnectTimeout = setTimeout(() => {
-      reconnectTimeout = null;
-      isReconnecting = false;
-      createSubscription().catch((err) => {
-        logger.error(`[${account.accountId}] Reconnection failed: ${String(err)}`);
-      });
-    }, delay);
-  };
-
-  // Initial connection
-  try {
-    await createSubscription();
-  } catch (err) {
-    if (err instanceof WsTokenRateLimitError) {
-      // 429 on initial connect – reconnect timer is already scheduled.
-      // Log prominently so the operator knows the monitor is paused.
-      logger.error(
-        `[${account.accountId}] Monitor paused due to /oauth/wstoken 429. ` +
-        `Will auto-retry in ${Math.ceil(err.retryAfterMs / 1000)}s.`,
-      );
-    } else {
-      throw err; // unexpected errors still propagate
     }
   }
+
+  // Event handler — registered once; autoRecover reuses the subscription object
+  const handleNotification = (event: unknown) => {
+    logger.debug(`WebSocket notification received: ${summarizeEvent(event)}`);
+    lastInboundAt = Date.now();
+    const evt = event as RingCentralWebhookEvent;
+    processWebSocketEvent({
+      event: evt,
+      account,
+      config,
+      runtime,
+      core,
+      statusSink,
+      ownerId,
+    }).catch((err) => {
+      logger.error(`[${account.accountId}] WebSocket event processing failed: ${String(err)}`);
+    });
+  };
+
+  const eventFilters = [
+    "/restapi/v1.0/glip/posts",
+    "/restapi/v1.0/glip/groups",
+  ];
+
+  // Subscribe once — autoRecover will restore the subscription on reconnect
+  const wsSubscription = await mgr.wsExt.subscribe(eventFilters, handleNotification);
+
+  logger.info(
+    `[${account.accountId}] RingCentral WebSocket subscription established` +
+    ` | autoRecover=enabled`,
+  );
+
+  // ── Step 3: Listen to autoRecover lifecycle events for observability ──
+  mgr.wsExt.eventEmitter.on("autoRecoverSuccess" as string, () => {
+    totalRecovers++;
+    logger.info(
+      `[${account.accountId}] WS session recovered successfully` +
+      ` | totalRecovers=${totalRecovers}`,
+    );
+  });
+
+  mgr.wsExt.eventEmitter.on("autoRecoverFailed" as string, () => {
+    totalRecovers++;
+    logger.warn(
+      `[${account.accountId}] WS session recovery failed; SDK re-subscribed automatically` +
+      ` | totalRecovers=${totalRecovers}`,
+    );
+  });
+
+  mgr.wsExt.eventEmitter.on("autoRecoverError" as string, (err: unknown) => {
+    const errStr = String(err);
+    // Detect fatal errors that should stop retrying
+    const isMissingWsPerm = errStr.includes("SUB-528") || errStr.includes("SubscriptionWebSocket");
+    const isAuthError = errStr.includes("401") || errStr.includes("Unauthorized") || errStr.includes("invalid_grant");
+
+    if (isMissingWsPerm) {
+      logger.error(
+        `[${account.accountId}] RingCentral app is missing the "WebSocket Subscriptions" permission. ` +
+        `Go to https://developers.ringcentral.com → your app → Settings → "App Permissions" and enable "WebSocket Subscriptions", ` +
+        `then re-authorize. No WebSocket push will be received until this is fixed.`,
+      );
+    } else if (isAuthError) {
+      logger.error(`[${account.accountId}] Authentication failed during auto-recover. Please check your credentials.`);
+    } else {
+      logger.error(`[${account.accountId}] WS auto-recover error: ${errStr}`);
+    }
+  });
+
+  // Log when a new WS object is created (reconnection happened)
+  mgr.wsExt.eventEmitter.on("newWebSocketObject" as string, () => {
+    logger.debug(`[${account.accountId}] New WebSocket connection established (auto-recover)`);
+  });
 
   // Start chat cache sync
   const workspace = account.config.workspace ?? (config.agents as any)?.defaults?.workspace;
@@ -1635,10 +1421,10 @@ export async function startRingCentralMonitor(
   });
 
   // ─── Health check watchdog ───
-  // Detects silent WS degradation (e.g. after macOS sleep/wake) by:
-  // 1. Checking timer drift to detect system sleep
-  // 2. Verifying WS readyState is still OPEN
-  // 3. Checking if inbound messages have gone stale (optional, only after first message)
+  // Supplements autoRecover's pingServer by detecting:
+  // 1. System sleep/wake (timer drift)
+  // 2. WS readyState not OPEN (autoRecover may already be handling this)
+  // On detection, triggers recover() which autoRecover may already be doing.
   lastHealthCheckWallClock = Date.now();
   healthCheckTimer = setInterval(() => {
     if (isShuttingDown || abortSignal.aborted) return;
@@ -1647,37 +1433,27 @@ export async function startRingCentralMonitor(
     const elapsed = now - lastHealthCheckWallClock;
     lastHealthCheckWallClock = now;
 
-    // Detect sleep/wake: if elapsed >> interval, the system likely slept
+    // Detect sleep/wake: if elapsed >> interval, the system likely slept.
+    // Kick autoRecover immediately instead of waiting for pingServer timeout.
     if (elapsed > HEALTH_CHECK_INTERVAL_MS + SLEEP_DRIFT_THRESHOLD_MS) {
       logger.warn(
-        `[${account.accountId}] System wake detected (timer drift ${Math.round(elapsed / 1000)}s). Forcing reconnect...`,
+        `[${account.accountId}] System wake detected (timer drift ${Math.round(elapsed / 1000)}s). Triggering recover...`,
       );
-      wsManagers.delete(account.accountId);
-      scheduleReconnect();
+      mgr.wsExt.recover().catch((e: unknown) => {
+        logger.error(`[${account.accountId}] recover() after wake failed: ${String(e)}`);
+      });
       return;
     }
 
-    // Check WS readyState
-    const mgr = wsManagers.get(account.accountId);
-    const ws = mgr?.wsExt?.ws;
+    // Check WS readyState — if closed/closing, kick recover
+    const ws = mgr.wsExt.ws;
     if (ws && ws.readyState !== 0 && ws.readyState !== 1) {
       logger.warn(
-        `[${account.accountId}] WebSocket readyState=${ws.readyState} (not OPEN). Forcing reconnect...`,
+        `[${account.accountId}] WebSocket readyState=${ws.readyState} (not OPEN). Triggering recover...`,
       );
-      wsManagers.delete(account.accountId);
-      scheduleReconnect();
-      return;
-    }
-
-    // If we've ever received inbound and it's been stale too long, force reconnect
-    if (lastInboundAt > 0 && now - lastInboundAt > INBOUND_STALE_THRESHOLD_MS) {
-      logger.warn(
-        `[${account.accountId}] No inbound for ${Math.round((now - lastInboundAt) / 1000)}s (threshold=${INBOUND_STALE_THRESHOLD_MS / 1000}s). Forcing reconnect...`,
-      );
-      lastInboundAt = 0; // Reset to prevent repeated triggers until next real inbound
-      wsManagers.delete(account.accountId);
-      scheduleReconnect();
-      return;
+      mgr.wsExt.recover().catch((e: unknown) => {
+        logger.error(`[${account.accountId}] recover() for closed WS failed: ${String(e)}`);
+      });
     }
   }, HEALTH_CHECK_INTERVAL_MS);
 
@@ -1686,7 +1462,7 @@ export async function startRingCentralMonitor(
     isShuttingDown = true;
     logger.info(
       `[${account.accountId}] Stopping RingCentral WebSocket subscription...` +
-      ` | totalReconnects=${totalReconnects}` +
+      ` | totalRecovers=${totalRecovers}` +
       ` | lastInboundAt=${lastInboundAt ? new Date(lastInboundAt).toISOString() : "never"}`,
     );
 
@@ -1697,17 +1473,11 @@ export async function startRingCentralMonitor(
       healthCheckTimer = null;
     }
 
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout);
-      reconnectTimeout = null;
-    }
-
-    if (wsSubscription) {
-      wsSubscription.revoke().catch((err) => {
-        logger.error(`[${account.accountId}] Failed to revoke subscription: ${String(err)}`);
-      });
-      wsSubscription = null;
-    }
+    // Revoke subscription + close WS + stop autoRecover interval
+    mgr.wsExt.revoke().catch((err: unknown) => {
+      logger.error(`[${account.accountId}] Failed to revoke WS extension: ${String(err)}`);
+    });
+    wsManagers.delete(account.accountId);
   };
 
   if (abortSignal.aborted) {
