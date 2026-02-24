@@ -685,11 +685,15 @@ async function processMessageWithPipeline(params: {
   logger.debug(`[${account.accountId}] Message passed selfOnly check`);
 
   // Fetch chat info to determine type
+  // NOTE: If chatInfo can't be fetched, we must avoid misclassifying a DM as Group.
+  // In particular, RC can sometimes fail chat lookup transiently while WS events still arrive.
   let chatType = "Group";
   let chatName: string | undefined;
   let chatInfo: any | undefined;
+  let chatInfoLookupOk = false;
   try {
     chatInfo = await getCachedChat(account, chatId);
+    chatInfoLookupOk = true;
     chatType = chatInfo?.type ?? "Group";
     chatName = chatInfo?.name ?? undefined;
 
@@ -698,8 +702,14 @@ async function processMessageWithPipeline(params: {
       `[${account.accountId}] chatInfo: ${summarizeChatInfo(chatInfo)}`,
     );
   } catch (err) {
-    // If we can't fetch chat info, assume it's a group.
     logger.error(`[${account.accountId}] getRingCentralChat failed: ${String(err)}`);
+  }
+
+  // If chatInfo lookup failed, fall back to DM to preserve expected routing for configured DMs.
+  // (Misclassifying a DM as group would prevent dm routing to the lead agent.)
+  if (!chatInfoLookupOk) {
+    chatType = "Personal";
+    logger.warn(`[${account.accountId}] chatInfo lookup failed; fallback chatType=Personal for routing (chatId=${chatId})`);
   }
 
   // Personal, PersonalChat, Direct are all DM types
