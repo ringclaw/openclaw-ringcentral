@@ -11,7 +11,11 @@ export function normalizeRingCentralTarget(raw: string): string | null {
     .trim();
 
   if (!normalized) return null;
-  return normalized;
+
+  // Sanitize unsafe characters (e.g. prevent path traversal or API route injection)
+  // Replaces anything not alphanumeric, dash, or underscore with underscore.
+  // RingCentral IDs are typically numeric or simple strings.
+  return normalized.replace(/[^a-zA-Z0-9\-_]/g, "_");
 }
 
 export function isRingCentralChatTarget(target: string): boolean {

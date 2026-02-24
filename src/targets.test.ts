@@ -37,6 +37,16 @@ describe("normalizeRingCentralTarget", () => {
     expect(normalizeRingCentralTarget("ringcentral:user:12345")).toBe("12345");
   });
 
+  it("sanitizes unsafe characters", () => {
+    expect(normalizeRingCentralTarget("rc:chat:../../etc/passwd")).toBe("______etc_passwd");
+    expect(normalizeRingCentralTarget("user:foo/bar")).toBe("foo_bar");
+    expect(normalizeRingCentralTarget("group:blah..foo")).toBe("blah__foo");
+    expect(normalizeRingCentralTarget("foo<bar>")).toBe("foo_bar_");
+    expect(normalizeRingCentralTarget("foo\\bar")).toBe("foo_bar");
+    expect(normalizeRingCentralTarget("foo?bar")).toBe("foo_bar");
+    expect(normalizeRingCentralTarget("foo:bar")).toBe("foo_bar");
+  });
+
   it("trims whitespace", () => {
     expect(normalizeRingCentralTarget("  12345  ")).toBe("12345");
   });
