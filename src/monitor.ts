@@ -742,6 +742,8 @@ async function processMessageWithPipeline(params: {
     })
     : undefined;
 
+  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config);
+
   if (isGroup) {
     const requireMention = groupEntry?.requireMention ?? account.config.requireMention ?? true;
     const mentions = eventBody.mentions ?? [];
@@ -758,7 +760,7 @@ async function processMessageWithPipeline(params: {
       implicitMention: false,
       hasAnyMention: mentionInfo.hasAnyMention,
       allowTextCommands,
-      hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
+      hasControlCommand,
       commandAuthorized: commandAuthorized === true,
     });
     effectiveWasMentioned = mentionGate.effectiveWasMentioned;
@@ -859,6 +861,7 @@ async function processMessageWithPipeline(params: {
     SenderId: senderId,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
     CommandAuthorized: commandAuthorized,
+    CommandSource: "text" as const,
     Provider: "ringcentral",
     Surface: "ringcentral",
     MessageSid: eventBody.id,
@@ -954,30 +957,41 @@ async function processMessageWithPipeline(params: {
     logger.debug(`[${account.accountId}] Failed to send thinking indicator: ${String(err)}`);
   }
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config,
-    dispatcherOptions: {
-      deliver: async (payload) => {
-        await deliverRingCentralReply({
-          payload,
-          account,
-          chatId,
-          core,
-          config,
-          statusSink,
-          typingPostId,
-        });
-        // Only use typing message for first delivery
-        typingPostId = undefined;
+  logger.debug(
+    `[${account.accountId}] Dispatching: isCommand=${hasControlCommand} authorized=${commandAuthorized} sessionKey=${route.sessionKey}`,
+  );
+
+  try {
+    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: ctxPayload,
+      cfg: config,
+      dispatcherOptions: {
+        deliver: async (payload) => {
+          await deliverRingCentralReply({
+            payload,
+            account,
+            chatId,
+            core,
+            config,
+            statusSink,
+            typingPostId,
+          });
+          // Only use typing message for first delivery
+          typingPostId = undefined;
+        },
+        onError: (err, info) => {
+          logger.error(
+            `[${account.accountId}] RingCentral ${info.kind} reply failed: ${String(err)}`,
+          );
+        },
       },
-      onError: (err, info) => {
-        logger.error(
-          `[${account.accountId}] RingCentral ${info.kind} reply failed: ${String(err)}`,
-        );
-      },
-    },
-  });
+    });
+  } catch (err) {
+    logger.error(`[${account.accountId}] Command/reply dispatch failed: ${String(err)}`);
+    if (typingPostId) {
+      try { await deleteRingCentralMessage({ account, chatId, postId: typingPostId }); } catch { /* ignore */ }
+    }
+  }
 }
 
 async function downloadAttachment(
