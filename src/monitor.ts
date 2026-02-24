@@ -137,7 +137,7 @@ export type RingCentralRuntimeEnv = {
 };
 
 function createLogger(core: RingCentralCoreRuntime): RingCentralLogger {
-  return core.logging.getChildLogger({ plugin: "ringcentral" });
+  return core.logging.getChildLogger({ subsystem: "gateway/channels/ringcentral" });
 }
 
 // Track recently sent message IDs to avoid processing bot's own replies
@@ -944,6 +944,16 @@ async function processMessageWithPipeline(params: {
 
   const groupSystemPrompt = groupConfigResolved.entry?.systemPrompt?.trim() || undefined;
 
+  // Resolve sender display name (best-effort, cached)
+  let senderName: string | undefined;
+  try {
+    const userInfo = await getCachedUser(account, senderId);
+    if (userInfo) {
+      const parts = [userInfo.firstName?.trim(), userInfo.lastName?.trim()].filter(Boolean);
+      senderName = parts.length > 0 ? parts.join(" ") : undefined;
+    }
+  } catch { /* ignore */ }
+
   // Build a better conversation label for sessions/dashboard.
   // - Prefer chatName when available
   // - Fallback to chat:<chatId>
@@ -959,6 +969,7 @@ async function processMessageWithPipeline(params: {
   // - DM: agent:main:ringcentral:dm:{peerId} (or main session based on dmScope config)
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     // IMPORTANT:
@@ -972,6 +983,8 @@ async function processMessageWithPipeline(params: {
     ChatType: isGroup ? "channel" : "direct",
     ConversationLabel: conversationLabel,
     SenderId: senderId,
+    SenderName: senderName,
+    Timestamp: eventBody.creationTime ? Date.parse(eventBody.creationTime) : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
     CommandAuthorized: commandAuthorized,
     CommandSource: "text" as const,
