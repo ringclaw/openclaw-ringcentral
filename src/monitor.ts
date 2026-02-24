@@ -611,12 +611,16 @@ async function processMessageWithPipeline(params: {
   let fullEventBody = eventBody;
   if (!fullEventBody.text && fullEventBody.id) {
     try {
-      const platform = runtime.sdk.platform();
-      const r = await platform.get(`/restapi/v1.0/glip/posts/${fullEventBody.id}`);
-      const post = await r.json();
-      // Merge: prefer fetched fields.
-      fullEventBody = { ...fullEventBody, ...post };
-      logger.debug(`[${account.accountId}] Enriched post ${fullEventBody.id} via REST (missing text in WS event)`);
+      const platform = runtime?.sdk?.platform?.();
+      if (!platform) {
+        logger.warn(`[${account.accountId}] Enrich skipped: sdk/platform not ready (postId=${fullEventBody.id})`);
+      } else {
+        const r = await platform.get(`/restapi/v1.0/glip/posts/${fullEventBody.id}`);
+        const post = await r.json();
+        // Merge: prefer fetched fields.
+        fullEventBody = { ...fullEventBody, ...post };
+        logger.debug(`[${account.accountId}] Enriched post ${fullEventBody.id} via REST (missing text in WS event)`);
+      }
     } catch (e) {
       logger.warn(`[${account.accountId}] Failed to enrich post ${fullEventBody.id} via REST: ${String(e)}`);
     }
