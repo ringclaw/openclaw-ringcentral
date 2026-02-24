@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026.2.23] - 2026-02-24
+
+### Security
+
+- **Fail-Closed Group Policy** - Centralized group policy resolution using `resolveAllowlistProviderRuntimeGroupPolicy` / `resolveDefaultGroupPolicy` / `warnMissingProviderGroupPolicyFallbackOnce` from openclaw plugin-sdk (#73)
+- **AllowFrom ID-Only Matching** - Added `dangerouslyAllowNameMatching` config; default is ID-only matching for allowFrom entries (#73)
+- **Streaming Download DoS Protection** - Attachment downloads now use streaming with cumulative byte check instead of loading full `arrayBuffer()` into memory; both Content-Length pre-check and stream-level abort on exceed (#46)
+- **Selective Safe-Field Logging** - Replaced recursive `redactSensitive` with zero-allocation `summarizeChatInfo` / `summarizeEvent` that log only safe fields (id, type, memberCount, status); no message text, user names, or emails in debug logs (#69)
+- **Target ID Sanitization** - `normalizeRingCentralTarget` enforces `[a-zA-Z0-9\-_]` allowlist to prevent path traversal / API route injection (#45)
+
+### Added
+
+- **Inbound Context Alignment** - Added `BodyForAgent` (raw user text without envelope), `SenderName` (resolved from /persons API, cached), and `Timestamp` (message creation time) to inbound context payload, aligning with Discord channel (#79)
+- **WebSocket Permission Error Detection** - Specific detection for SUB-528 (`SubscriptionWebSocket` permission missing) with actionable error message linking to RingCentral developer portal; stops retrying on permission errors (#75, #76)
+- **TtlCache Class** - Replaced `setTimeout`-based cache with lazy-eviction `TtlCache` class (maxSize=500, TTL=5min) for chat/user info caching; no timer memory leaks (#47)
+- **Batched Direct Chat Resolution** - Direct chat name resolution uses batched processing (batch=3, 200ms delay) instead of sequential 500ms per item (#48)
+- **Async File I/O** - Chat cache converted from sync `fs.readFileSync`/`writeFileSync` to async `readFile`/`writeFile`/`mkdir` (#48)
+- **Parallel Chat Fetch** - Concurrent fetching of different chat types for faster cache sync (#44)
+
+### Changed
+
+- **Upgraded openclaw** from 2026.1.29 to 2026.2.23 (devDeps + peerDeps) (#73)
+- **Logger Subsystem** - Changed logger binding from `{ plugin: "ringcentral" }` to `{ subsystem: "gateway/channels/ringcentral" }` matching openclaw core convention (#79)
+- **Deduplicated AllowFrom Helpers** - Extracted `normalizeRingCentralAllowFromEntries` helper; replaced inline `formatAllowFrom` logic in dock and plugin config (#73)
+- **Onboarding Merge Helper** - Uses `mergeAllowFromEntries` from plugin-sdk instead of manual `new Set()` deduplication (#73)
+- **TtlCache MRU Eviction** - Delete-before-set to maintain Map iteration order by recency; eviction scan breaks on first non-expired entry (O(k) vs O(N)) (#78)
+
+### Fixed
+
+- **WebSocket Subscription Listener Leak** - Close underlying WS and discard WsManager on any subscribe failure; prevents @rc-ex/ws leaked listener from crashing on `this.subscriptionInfo.id` (undefined) when next WS message arrives (#76)
+- **Command Routing** - Hoisted `hasControlCommand` check before `isGroup` block to reuse result; removed inconsistent user-visible error fallback (#42)
+- **Install Script plugins.allow** - Clear `plugins.allow` during cleanup and restore after install to prevent validation error on reinstall (#74)
+- **WsToken 429 Rate Limit** - Throw `WsTokenRateLimitError` with `retryAfterMs` to properly pause and backoff on `/oauth/wstoken` rate limits (#72)
+
 ## [2026.2.10] - 2026-02-10
 
 ### Added
