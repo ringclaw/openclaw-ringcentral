@@ -186,11 +186,13 @@ if [ -n "$CREDENTIALS_BACKUP" ] && [ "$CREDENTIALS_BACKUP" != "" ]; then
         const cfg = JSON.parse(fs.readFileSync('$OPENCLAW_CONFIG', 'utf8'));
         const credentials = $CREDENTIALS_BACKUP;
         
+        // Restore channel config WITHOUT 'enabled: true'.
+        // Setting channels.ringcentral.enabled triggers openclaw's auto-enable
+        // to write plugins.entries.ringcentral which fails validation because
+        // the actual plugin id is 'openclaw-ringcentral'.
+        // Enablement is managed via plugins.entries.openclaw-ringcentral instead.
         if (!cfg.channels) cfg.channels = {};
-        cfg.channels.ringcentral = {
-            enabled: true,
-            credentials: credentials
-        };
+        cfg.channels.ringcentral = { credentials: credentials };
         
         fs.writeFileSync('$OPENCLAW_CONFIG', JSON.stringify(cfg, null, 2));
     "
