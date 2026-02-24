@@ -223,6 +223,74 @@ describe("Attachment API", () => {
   });
 });
 
+describe("downloadRingCentralAttachment", () => {
+  it("rejects when content-length exceeds max bytes", async () => {
+    const { getRingCentralPlatform } = await import("./auth.js");
+    const { downloadRingCentralAttachment } = await import("./api.js");
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    });
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-length": "50", "content-type": "application/octet-stream" },
+    });
+    vi.mocked(getRingCentralPlatform).mockResolvedValue({ get: vi.fn().mockResolvedValue(response) } as any);
+
+    await expect(
+      downloadRingCentralAttachment({ account: mockAccount, contentUri: "/media/123", maxBytes: 10 }),
+    ).rejects.toThrow(/max bytes/i);
+  });
+
+  it("rejects when streamed payload exceeds max bytes", async () => {
+    const { getRingCentralPlatform } = await import("./auth.js");
+    const { downloadRingCentralAttachment } = await import("./api.js");
+    const chunks = [new Uint8Array(6), new Uint8Array(6)];
+    let index = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (index < chunks.length) {
+          controller.enqueue(chunks[index++]);
+        } else {
+          controller.close();
+        }
+      },
+    });
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+    });
+    vi.mocked(getRingCentralPlatform).mockResolvedValue({ get: vi.fn().mockResolvedValue(response) } as any);
+
+    await expect(
+      downloadRingCentralAttachment({ account: mockAccount, contentUri: "/media/123", maxBytes: 10 }),
+    ).rejects.toThrow(/max bytes/i);
+  });
+
+  it("downloads successfully within max bytes", async () => {
+    const { getRingCentralPlatform } = await import("./auth.js");
+    const { downloadRingCentralAttachment } = await import("./api.js");
+    const data = new Uint8Array([1, 2, 3, 4, 5]);
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(data);
+        controller.close();
+      },
+    });
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+    vi.mocked(getRingCentralPlatform).mockResolvedValue({ get: vi.fn().mockResolvedValue(response) } as any);
+
+    const result = await downloadRingCentralAttachment({ account: mockAccount, contentUri: "/media/123", maxBytes: 100 });
+    expect(result.buffer.length).toBe(5);
+    expect(result.contentType).toBe("image/png");
+  });
+});
+
 describe("Favorite Chats API", () => {
   it("listRingCentralFavoriteChats should be exported", async () => {
     const { listRingCentralFavoriteChats } = await import("./api.js");
