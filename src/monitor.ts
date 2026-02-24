@@ -626,6 +626,18 @@ async function processMessageWithPipeline(params: {
     }
   }
 
+  // Early gate: only process enabled chats.
+  // - Always allow bound DM chats (configured via channels.ringcentral.dmChats in openclaw.json)
+  // - For group/team chats, only process when groups[chatId].enabled === true
+  const enabledGroups = (account.config.groups ?? {}) as Record<string, any>;
+  const dmChats = new Set([...(account.config as any).dmChats ?? []].map(String));
+  const isBoundDmChat = dmChats.has(String(chatId));
+  const groupEnabled = Boolean(enabledGroups[String(chatId)]?.enabled);
+  if (!isBoundDmChat && !groupEnabled) {
+    // Hard ignore to avoid noise and unintended processing.
+    return;
+  }
+
   const messageText = (fullEventBody.text ?? "").trim();
   const attachments = fullEventBody.attachments ?? [];
   const hasMedia = attachments.length > 0;
@@ -779,17 +791,21 @@ async function processMessageWithPipeline(params: {
       : "group"
     : "dm";
 
+  const routePeerId = isGroup ? chatId : (dmPeerUserId || chatId);
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
     channel: "ringcentral",
     accountId: account.accountId,
     peer: {
       kind: peerKind,
-      id: isGroup ? chatId : (dmPeerUserId || chatId),
+      id: routePeerId,
     },
   });
 
   logger.debug(`[${account.accountId}] Chat type: ${chatType}, isGroup: ${isGroup}`);
+  logger.debug(
+    `[${account.accountId}] resolvedRoute: peerKind=${peerKind} peerId=${routePeerId} -> agentId=${(route as any)?.agentId ?? "(default)"}`,
+  );
 
   // In selfOnly mode, only allow "Personal" chat (conversation with yourself)
   if (selfOnly && !isPersonalChat) {
