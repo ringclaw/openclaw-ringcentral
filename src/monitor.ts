@@ -1445,14 +1445,24 @@ export async function startRingCentralMonitor(
       }
 
     } catch (err) {
+      // ── Clean up leaked subscription listener ──
+      // @rc-ex/ws Subscription constructor registers a message listener on ws
+      // BEFORE subscribe() completes.  If subscribe() fails the listener
+      // remains attached and will crash on this.subscriptionInfo.id (undefined)
+      // when the next WS message arrives.  Close the underlying ws and discard
+      // the WsManager so the reconnect path creates a fresh connection.
+      const failedMgr = wsManagers.get(account.accountId);
+      if (failedMgr?.wsExt?.ws) {
+        try { failedMgr.wsExt.ws.close(); } catch { /* ignore */ }
+      }
+      wsManagers.delete(account.accountId);
+
       // ── 429 rate-limit from /oauth/wstoken ──
       // WsTokenRateLimitError is thrown by ensureWsConnected() when the
       // underlying wsExt.connect() gets a 429.
       if (err instanceof WsTokenRateLimitError) {
         const backoffMs = err.retryAfterMs;
         nextAllowedWsConnectAt = Date.now() + backoffMs;
-        // Clear WsManager cache so next attempt creates a fresh connection.
-        wsManagers.delete(account.accountId);
         logger.error(err.message);
         scheduleReconnect(true);
         throw err; // propagate so caller knows requests are paused
@@ -1462,13 +1472,6 @@ export async function startRingCentralMonitor(
       const errStr = String(err);
       const msg = e?.stack ? String(e.stack) : errStr;
 
-      // Check for auth errors - don't retry on auth failures
-      const isAuthError = errStr.includes("401") || errStr.includes("Unauthorized") || errStr.includes("invalid_grant");
-      if (isAuthError) {
-        logger.error(`[${account.accountId}] Authentication failed. Please check your credentials.`);
-        return;
-      }
-
       // Check for missing WebSocket Subscriptions permission (SUB-528)
       const isMissingWsPerm = errStr.includes("SUB-528") || errStr.includes("SubscriptionWebSocket");
       if (isMissingWsPerm) {
@@ -1477,6 +1480,13 @@ export async function startRingCentralMonitor(
           `Go to https://developers.ringcentral.com → your app → Settings → "App Permissions" and enable "WebSocket Subscriptions", ` +
           `then re-authorize. No WebSocket push will be received until this is fixed.`,
         );
+        return;
+      }
+
+      // Check for auth errors - don't retry on auth failures
+      const isAuthError = errStr.includes("401") || errStr.includes("Unauthorized") || errStr.includes("invalid_grant");
+      if (isAuthError) {
+        logger.error(`[${account.accountId}] Authentication failed. Please check your credentials.`);
         return;
       }
 
