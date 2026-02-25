@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026.2.25] - 2026-02-25
+
+### Added
+
+- **Actions UI Toggles** - Exposed all 5 action categories (messages, tasks, events, notes, chat) as toggle switches in Channels UI via `openclaw.plugin.json` schema and uiHints
+- **Inbound Message Deduplication** - Added `inboundDedupCache` (TtlCache, 2min TTL, maxSize=500) to prevent duplicate thinking/reply from redelivered WebSocket events
+- **REST Enrichment for WS Events** - Enrich WebSocket post events via REST API when `text` field is missing; gate enrichment on `PostAdded` events only
+- **WS Payload Shape Fingerprint** - Log event body shape fingerprint for observability and debugging
+- **Route Observability** - Log `resolveAgentRoute` accountId, matchedBy, and bindings count
+
+### Changed
+
+- **WebSocket AutoRecover** - Enabled `@rc-ex/ws autoRecover` with exponential backoff (5s→5min) and 60s `pingServer`; subscribe once and let SDK handle reconnection/recovery. Removed manual `scheduleReconnect` loop entirely (-345 lines, +115 lines) (#80)
+- **Duplicate Subscription Guard** - Added `mgr.subscribed` flag to prevent duplicate subscriptions from openclaw framework auto-restart
+- **Install Script** - Removed `channels.ringcentral.enabled` from config restore step; enablement managed via `plugins.entries.openclaw-ringcentral` instead
+- **Routing peerKind** - Use `peerKind=direct` instead of `dm` for DM chats; coerce chatId/route peerId to string
+
+### Fixed
+
+- **DM Routing Fallback** - Fallback to DM routing when chatInfo lookup fails or returns null; only DM-fallback when chatId is explicitly bound
+- **TDZ Crash in WS Pipeline** - Avoid temporal dead zone crash in WebSocket event processing pipeline
+- **REST Enrich Guard** - Guard REST enrichment when SDK platform is not ready
+- **Empty Message Drops** - Use enriched mentions and log empty message drops instead of silently discarding
+- **Post Update/Send Failures** - Log post update/send failures after thinking indicator for easier debugging
+
+### Code Quality
+
+- **lint:strict Compliance** - Resolved all 22 oxlint warnings to achieve zero-warning `lint:strict` pass:
+  - Removed 5 unused imports (`RingCentralAttachment`, `RingCentralMention`, `WizardPrompter`, `vi`, unused generic `T`)
+  - Removed 4 unused variables (`targetChatId` x4, `runtime`, `wsSubscription`)
+  - Removed 7 useless fallback spreads (`?? {}`)
+  - Prefixed 2 intentionally-unused params (`_cfg`, `_mEvent`)
+  - Added lint-disable for intentional NUL placeholder regex and unassigned crash-reproduction test var
+
 ## [2026.2.23] - 2026-02-24
 
 ### Security
