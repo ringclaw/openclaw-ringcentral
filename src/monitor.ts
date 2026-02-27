@@ -510,25 +510,16 @@ export function isSenderAllowed(
   });
 }
 
-function resolveGroupConfig(params: {
-  groupId: string;
-  groupName?: string | null;
-  groups?: Record<string, { requireMention?: boolean; allow?: boolean; enabled?: boolean; users?: Array<string | number>; systemPrompt?: string }>;
-}) {
-  const { groupId, groupName, groups } = params;
-  const entries = groups ?? {};
-  const keys = Object.keys(entries);
-  if (keys.length === 0) {
-    return { entry: undefined, allowlistConfigured: false };
-  }
+function findGroupEntry(
+  groups: Record<string, { requireMention?: boolean; enabled?: boolean; users?: Array<string | number>; systemPrompt?: string }>,
+  groupId: string,
+  groupName?: string | null,
+) {
   const normalizedName = groupName?.trim().toLowerCase();
-  const candidates = [groupId, groupName ?? "", normalizedName ?? ""].filter(Boolean);
-  let entry = candidates.map((candidate) => entries[candidate]).find(Boolean);
-  if (!entry && normalizedName) {
-    entry = entries[normalizedName];
-  }
-  const fallback = entries["*"];
-  return { entry: entry ?? fallback, allowlistConfigured: true, fallback };
+  return groups[groupId]
+    ?? (groupName ? groups[groupName] : undefined)
+    ?? (normalizedName ? groups[normalizedName] : undefined)
+    ?? groups["*"];
 }
 
 function extractMentionInfo(mentions: RingCentralMention[], botExtensionId?: string | null) {
@@ -706,18 +697,6 @@ async function processMessageWithPipeline(params: {
   const isDirectChat = chatType === "Direct";
   const isGroup = !(isPersonalChat || isDirectChat);
 
-  // Only track configured groups; ignore any other group/team chats.
-  // NOTE: Direct/Personal chats are NOT subject to this filter.
-  const configuredGroups = account.config.groups ?? {};
-  const hasConfiguredGroups = Object.keys(configuredGroups).length > 0;
-  const isTrackedGroup = !isGroup
-    ? true
-    : Boolean(configuredGroups[chatId] || configuredGroups[String(chatId)] || configuredGroups[chatName ?? ""]);
-  if (isGroup && hasConfiguredGroups && !isTrackedGroup) {
-    logVerbose(core, `ignore group chat not in configured groups: chatId=${chatId}`);
-    return;
-  }
-
   // Session key should be per conversation id (RingCentral chatId)
   // NOTE: keep peer.kind stable for group vs dm.
   // Session routing
@@ -787,13 +766,9 @@ async function processMessageWithPipeline(params: {
     blockedLabel: "group/team messages",
     log: (msg) => logger.warn(msg),
   });
-  const groupConfigResolved = resolveGroupConfig({
-    groupId: chatId,
-    groupName: chatName ?? null,
-    groups: account.config.groups ?? undefined,
-  });
-  const groupEntry = groupConfigResolved.entry;
-  const groupUsers = groupEntry?.users ?? account.config.groupAllowFrom ?? [];
+  const groups = account.config.groups ?? {};
+  const groupsConfigured = Object.keys(groups).length > 0;
+  const groupEntry = isGroup ? findGroupEntry(groups, chatId, chatName) : undefined;
   let effectiveWasMentioned: boolean | undefined;
 
   if (isGroup) {
@@ -802,25 +777,22 @@ async function processMessageWithPipeline(params: {
       logger.debug(`[${account.accountId}] DROP: groupPolicy=disabled`);
       return;
     }
-    const groupAllowlistConfigured = groupConfigResolved.allowlistConfigured;
-    const groupAllowed =
-      Boolean(groupEntry) || Boolean((account.config.groups ?? {})["*"]);
-    logger.debug(`[${account.accountId}] Allowlist check: configured=${groupAllowlistConfigured}, allowed=${groupAllowed}`);
     if (groupPolicy === "allowlist") {
-      if (!groupAllowlistConfigured) {
-        logger.debug(`[${account.accountId}] DROP: no allowlist configured`);
+      if (!groupsConfigured) {
+        logger.debug(`[${account.accountId}] DROP: allowlist policy but no groups configured`);
         return;
       }
-      if (!groupAllowed) {
+      if (!groupEntry) {
         logger.debug(`[${account.accountId}] DROP: not in allowlist`);
         return;
       }
     }
-    if (groupEntry?.enabled === false || groupEntry?.allow === false) {
+    if (groupEntry?.enabled === false) {
       logVerbose(core, `drop group message (chat disabled, chat=${chatId})`);
       return;
     }
 
+    const groupUsers = groupEntry?.users ?? [];
     if (groupUsers.length > 0) {
       const ok = isSenderAllowed(senderId, groupUsers.map((v) => String(v)));
       if (!ok) {
@@ -892,7 +864,7 @@ async function processMessageWithPipeline(params: {
             To: `ringcentral:${chatId}`,
             OriginatingChannel: "ringcentral",
             OriginatingTo: `ringcentral:${chatId}`,
-            ChatType: "channel",
+            ChatType: peerKind === "direct" ? "direct" : peerKind,
             AccountId: route.accountId,
             SessionKey: route.sessionKey,
             ConversationLabel: metaLabel,
@@ -917,7 +889,7 @@ async function processMessageWithPipeline(params: {
       ? await core.channel.pairing.readAllowFromStore("ringcentral").catch(() => [])
       : [];
   const effectiveAllowFrom = [...configAllowFromStr, ...storeAllowFrom];
-  const commandAllowFrom = isGroup ? groupUsers.map((v) => String(v)) : effectiveAllowFrom;
+  const commandAllowFrom = isGroup ? (groupEntry?.users ?? []).map((v: string | number) => String(v)) : effectiveAllowFrom;
   const useAccessGroups = config.commands?.useAccessGroups !== false;
   const senderAllowedForCommands = isSenderAllowed(senderId, commandAllowFrom);
   const commandAuthorized = shouldComputeAuth
@@ -1016,7 +988,7 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = groupConfigResolved.entry?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = groupEntry?.systemPrompt?.trim() || undefined;
 
   // Resolve sender display name (best-effort, cached)
   let senderName: string | undefined;
@@ -1054,7 +1026,7 @@ async function processMessageWithPipeline(params: {
     To: isGroup ? `ringcentral:${peerKind}:${chatId}` : `ringcentral:${chatId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
-    ChatType: isGroup ? "channel" : "direct",
+    ChatType: peerKind,
     ConversationLabel: conversationLabel,
     SenderId: senderId,
     SenderName: senderName,
