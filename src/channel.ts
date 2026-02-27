@@ -214,9 +214,9 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
+      const groupAllowlistConfigured =
+        Boolean(account.config.groups) && Object.keys(account.config.groups ?? {}).length > 0;
       if (groupPolicy === "open") {
-        const groupAllowlistConfigured =
-          Boolean(account.config.groups) && Object.keys(account.config.groups ?? {}).length > 0;
         if (groupAllowlistConfigured) {
           warnings.push(
             `- RingCentral chats: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set channels.ringcentral.groupPolicy="allowlist" and configure channels.ringcentral.groups.`,
@@ -226,6 +226,16 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
             `- RingCentral chats: groupPolicy="open" with no channels.ringcentral.groups allowlist; any group can trigger (mention-gated). Set channels.ringcentral.groupPolicy="allowlist" and configure channels.ringcentral.groups.`,
           );
         }
+      }
+      if (groupPolicy === "allowlist" && !groupAllowlistConfigured) {
+        warnings.push(
+          `- RingCentral chats: groupPolicy="allowlist" but no groups configured; all group messages will be silently dropped. Configure channels.ringcentral.groups to allow specific groups.`,
+        );
+      }
+      if (groupPolicy !== "disabled" && !account.config.botExtensionId) {
+        warnings.push(
+          `- RingCentral groups: botExtensionId is not configured; mention gating (requireMention) will not work. Set channels.ringcentral.botExtensionId to enable @-mention detection.`,
+        );
       }
       if (account.config.dm?.policy === "open") {
         warnings.push(
