@@ -33,6 +33,8 @@ const CHAT_TYPES = ["Personal", "Direct", "Group", "Team", "Everyone"] as const;
 const CACHE_FILE = "ringcentral-chat-cache.json";
 
 let memoryCache: CachedChat[] = [];
+// Optimization: Pre-compute lowercased names for faster search
+let searchCache: string[] = [];
 let cachedOwnerId: string | undefined;
 let syncContext: {
   account: ResolvedRingCentralAccount;
@@ -44,10 +46,25 @@ export function getCachedChats(): CachedChat[] {
   return memoryCache;
 }
 
+function updateSearchIndex(chats: CachedChat[]) {
+  // 1:1 mapping with memoryCache indices
+  searchCache = chats.map((c) => (c.name || "").toLowerCase());
+}
+
 export function searchCachedChats(query: string): CachedChat[] {
   const q = query.toLowerCase().trim();
   if (!q) return [];
-  return memoryCache.filter((c) => (c.name || "").toLowerCase().includes(q));
+
+  // Optimization: use parallel array for search to avoid repeated lowercasing
+  // and object property access overhead.
+  const result: CachedChat[] = [];
+  const len = searchCache.length;
+  for (let i = 0; i < len; i++) {
+    if (searchCache[i].includes(q)) {
+      result.push(memoryCache[i]);
+    }
+  }
+  return result;
 }
 
 export function findDirectChatByMember(memberId: string): CachedChat | undefined {
@@ -244,6 +261,7 @@ async function syncOnce(
 
     const changed = cacheChanged(memoryCache, chats);
     memoryCache = chats;
+    updateSearchIndex(memoryCache);
 
     if (workspace && changed) {
       await writeCacheFile(workspace, chats, cachedOwnerId, logger);
@@ -277,6 +295,7 @@ export async function startChatCacheSync(params: {
   if (workspace) {
     const cached = await readCacheFile(workspace, logger);
     memoryCache = cached.chats;
+    updateSearchIndex(memoryCache);
     if (cached.ownerId) {
       cachedOwnerId = cached.ownerId;
     }
