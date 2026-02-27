@@ -1084,3 +1084,38 @@ export async function probeRingCentral(
     };
   }
 }
+
+export async function checkWsSubscriptionPermission(
+  account: ResolvedRingCentralAccount,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const platform = await getRingCentralPlatform(account);
+    // Attempt a dry-run subscription to check permissions.
+    // Creating a real subscription and immediately deleting is too invasive,
+    // so we POST and catch the 403/SUB-528 to detect the missing permission.
+    const response = await platform.post("/restapi/v1.0/subscription", {
+      deliveryMode: { transportType: "WebSocket" },
+      eventFilters: ["/restapi/v1.0/glip/posts"],
+    });
+    // If it succeeds, clean up the test subscription
+    const body = await response.json();
+    if (body?.id) {
+      try {
+        await platform.delete(`/restapi/v1.0/subscription/${body.id}`);
+      } catch {
+        // Best-effort cleanup
+      }
+    }
+    return { ok: true };
+  } catch (err) {
+    const errStr = String(err);
+    if (errStr.includes("SUB-528") || errStr.includes("SubscriptionWebSocket")) {
+      return {
+        ok: false,
+        error: "WebSocket Subscriptions permission not enabled on this app",
+      };
+    }
+    // Other errors (network, auth, etc.) — don't assume permission problem
+    return { ok: true };
+  }
+}

@@ -206,7 +206,9 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const defaultGroupPolicy = typeof resolveDefaultGroupPolicy === "function"
+        ? resolveDefaultGroupPolicy(cfg)
+        : undefined;
       const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
         providerConfigPresent: (cfg as OpenClawConfig).channels?.ringcentral !== undefined,
         groupPolicy: account.config.groupPolicy,

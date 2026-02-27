@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk";
 
 import { resolveRingCentralAccount } from "./accounts.js";
-import { probeRingCentral } from "./api.js";
+import { checkWsSubscriptionPermission, probeRingCentral } from "./api.js";
 import type { RingCentralConfig } from "./types.js";
 
 const channel = "ringcentral" as const;
@@ -366,6 +366,27 @@ export const ringcentralOnboarding: ChannelOnboardingAdapter = {
         const probe = await probeRingCentral(resolvedAccount);
         if (probe.ok) {
           progress.stop("RingCentral credentials validated successfully!");
+
+          // Check WebSocket Subscriptions permission
+          try {
+            const wsCheckResult = await checkWsSubscriptionPermission(resolvedAccount);
+            if (!wsCheckResult.ok) {
+              await prompter.note(
+                [
+                  "WARNING: Your RingCentral app may be missing the \"WebSocket Subscriptions\" permission.",
+                  `Error: ${wsCheckResult.error}`,
+                  "",
+                  "To fix: Go to https://developers.ringcentral.com → your app → Settings →",
+                  "\"App Permissions\" and enable \"WebSocket Subscriptions\".",
+                  "",
+                  "Without this permission, the bot cannot receive real-time messages.",
+                ].join("\n"),
+                "WebSocket Permission Check",
+              );
+            }
+          } catch {
+            // Non-fatal: permission check itself may fail, don't block onboarding
+          }
         } else {
           progress.stop(`Warning: credential validation failed - ${probe.error}`);
         }

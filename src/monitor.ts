@@ -631,7 +631,7 @@ async function processMessageWithPipeline(params: {
   const hasMedia = attachments.length > 0;
   const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
   if (!rawBody) {
-    logger.warn(
+    logger.debug(
       `[${account.accountId}] DROP:empty_rawBody (postId=${fullEventBody.id ?? ""} chatId=${chatId} sender=${senderId})`,
     );
     return;
@@ -772,7 +772,9 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const defaultGroupPolicy = typeof resolveDefaultGroupPolicy === "function"
+    ? resolveDefaultGroupPolicy(config)
+    : undefined;
   const { groupPolicy, providerMissingFallbackApplied } = resolveAllowlistProviderRuntimeGroupPolicy({
     providerConfigPresent: config.channels?.ringcentral !== undefined,
     groupPolicy: account.config.groupPolicy,
@@ -1370,7 +1372,23 @@ export async function startRingCentralMonitor(
   // ── Step 2: Create WS manager + connect + subscribe (once) ──
   logger.info(`[${account.accountId}] Starting RingCentral WebSocket subscription...`);
 
-  const mgr = await getOrCreateWsManager(account, logger);
+  let mgr: WsManager;
+  try {
+    mgr = await getOrCreateWsManager(account, logger);
+  } catch (err) {
+    const errStr = String(err);
+    if (errStr.includes("Invalid client application")) {
+      const masked = account.clientId
+        ? `${account.clientId.slice(0, 4)}...${account.clientId.slice(-4)}`
+        : "(empty)";
+      throw new Error(
+        `RingCentral clientId ${masked} is not a valid application. ` +
+        `Please verify your app at https://developers.ringcentral.com → Apps → check Client ID/Secret. ` +
+        `Original: ${errStr}`,
+      );
+    }
+    throw err;
+  }
 
   // Guard: if this WsManager already has an active subscription, skip.
   // The framework's auto-restart may call startRingCentralMonitor multiple
@@ -1421,7 +1439,25 @@ export async function startRingCentralMonitor(
   ];
 
   // Subscribe once — autoRecover will restore the subscription on reconnect
-  await mgr.wsExt.subscribe(eventFilters, handleNotification);
+  try {
+    await mgr.wsExt.subscribe(eventFilters, handleNotification);
+  } catch (err) {
+    const errStr = String(err);
+    const isSub528 = errStr.includes("SUB-528") || errStr.includes("SubscriptionWebSocket");
+    if (isSub528) {
+      // Fatal: missing WebSocket Subscriptions permission — retrying won't help
+      clearRingCentralWsManager(account.accountId);
+      throw new Error(
+        `[FATAL] RingCentral app is missing the "WebSocket Subscriptions" permission. ` +
+        `Go to https://developers.ringcentral.com → your app → Settings → "App Permissions" ` +
+        `and enable "WebSocket Subscriptions", then restart the gateway. ` +
+        `No retries will be attempted for this error.`,
+      );
+    }
+    // Non-fatal subscribe errors: clean up WsManager to avoid leaked listeners
+    clearRingCentralWsManager(account.accountId);
+    throw err;
+  }
   mgr.subscribed = true;
 
   logger.info(
