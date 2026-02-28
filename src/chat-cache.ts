@@ -102,14 +102,24 @@ async function writeCacheFile(workspace: string, chats: CachedChat[], ownerId: s
 
 function cacheChanged(prev: CachedChat[], next: CachedChat[]): boolean {
   if (prev.length !== next.length) return true;
-  const prevIds = new Set(prev.map((c) => c.id));
-  for (const c of next) {
-    if (!prevIds.has(c.id)) return true;
+
+  // Optimization: Use a single Map to check both existence and name changes
+  // in one pass over 'prev' and one pass over 'next', avoiding redundant array allocations.
+  const prevMap = new Map<string, string>();
+  for (let i = 0; i < prev.length; i++) {
+    const c = prev[i];
+    prevMap.set(c.id, c.name);
   }
-  const prevMap = new Map(prev.map((c) => [c.id, c.name]));
-  for (const c of next) {
-    if (prevMap.get(c.id) !== c.name) return true;
+
+  for (let i = 0; i < next.length; i++) {
+    const c = next[i];
+
+    // Check if ID is missing or if name changed.
+    if (!prevMap.has(c.id) || prevMap.get(c.id) !== c.name) {
+      return true;
+    }
   }
+
   return false;
 }
 

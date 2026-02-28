@@ -1,0 +1,3 @@
+## 2024-11-20 - Reducing Array Allocations in cacheChanged
+**Learning:** Using `.map()` inside array iteration helpers like `Set` or `Map` constructors (`new Set(arr.map(...))`) creates redundant intermediate arrays. The `cacheChanged` function was taking 4 loop iterations and creating 2 arrays per call. Consolidating logic to use a single `Map` built with a standard `for` loop halves execution time.
+**Action:** When comparing arrays for differences (IDs and properties), build a single `Map` of ID -> property using a single `for` loop, then check both existence and equality against that Map in a second loop. This avoids O(N) intermediate array allocations and reduces total iterations from 4 to 2.
