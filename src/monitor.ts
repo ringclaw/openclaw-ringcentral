@@ -383,6 +383,13 @@ export function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9-_]/g, "_");
 }
 
+export function sanitizeAttachmentFilename(name: string): string {
+  // Prevent path traversal by removing ".." sequences first
+  const noTraversal = name.replace(/\.{2,}/g, "_");
+  // Replace unsafe chars with underscore. Allow dots for file extensions.
+  return noTraversal.replace(/[^a-zA-Z0-9-_.]/g, "_");
+}
+
 /** @internal Exported for testing only. */
 export function summarizeChatInfo(chat: unknown): string {
   if (!chat || typeof chat !== "object") return "null";
@@ -1176,12 +1183,13 @@ async function downloadAttachment(
   if (!contentUri) return null;
   const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const downloaded = await downloadRingCentralAttachment({ account, contentUri, maxBytes });
+  const safeName = attachment.name ? sanitizeAttachmentFilename(attachment.name) : undefined;
   const saved = await core.channel.media.saveMediaBuffer(
     downloaded.buffer,
     downloaded.contentType ?? attachment.contentType,
     "inbound",
     maxBytes,
-    attachment.name,
+    safeName,
   );
   return { path: saved.path, contentType: saved.contentType };
 }

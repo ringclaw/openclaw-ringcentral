@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { summarizeChatInfo, summarizeEvent } from "./monitor.js";
+import { summarizeChatInfo, summarizeEvent, sanitizeAttachmentFilename } from "./monitor.js";
+
+describe("sanitizeAttachmentFilename", () => {
+  it("removes unsafe characters but keeps dots and safe characters", () => {
+    expect(sanitizeAttachmentFilename("my_file.txt")).toBe("my_file.txt");
+    expect(sanitizeAttachmentFilename("my-file-123.jpg")).toBe("my-file-123.jpg");
+    expect(sanitizeAttachmentFilename("file/with\\slashes.png")).toBe("file_with_slashes.png");
+    expect(sanitizeAttachmentFilename("file?name*.pdf")).toBe("file_name_.pdf");
+  });
+
+  it("prevents path traversal by neutralizing .. sequences", () => {
+    expect(sanitizeAttachmentFilename("../../../etc/passwd")).toBe("______etc_passwd");
+    expect(sanitizeAttachmentFilename("..\\..\\..\\etc\\passwd")).toBe("______etc_passwd");
+    expect(sanitizeAttachmentFilename("my..file.txt")).toBe("my_file.txt");
+    expect(sanitizeAttachmentFilename("...")).toBe("_");
+    expect(sanitizeAttachmentFilename("..")).toBe("_");
+  });
+});
 
 describe("summarizeChatInfo", () => {
   it("extracts only safe fields from chat object", () => {
