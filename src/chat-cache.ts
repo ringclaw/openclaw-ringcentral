@@ -33,6 +33,7 @@ const CHAT_TYPES = ["Personal", "Direct", "Group", "Team", "Everyone"] as const;
 const CACHE_FILE = "ringcentral-chat-cache.json";
 
 let memoryCache: CachedChat[] = [];
+let searchCache: string[] = [];
 let cachedOwnerId: string | undefined;
 let syncContext: {
   account: ResolvedRingCentralAccount;
@@ -47,7 +48,14 @@ export function getCachedChats(): CachedChat[] {
 export function searchCachedChats(query: string): CachedChat[] {
   const q = query.toLowerCase().trim();
   if (!q) return [];
-  return memoryCache.filter((c) => (c.name || "").toLowerCase().includes(q));
+
+  const results: CachedChat[] = [];
+  for (let i = 0; i < searchCache.length; i++) {
+    if (searchCache[i].includes(q)) {
+      results.push(memoryCache[i]);
+    }
+  }
+  return results;
 }
 
 export function findDirectChatByMember(memberId: string): CachedChat | undefined {
@@ -102,14 +110,19 @@ async function writeCacheFile(workspace: string, chats: CachedChat[], ownerId: s
 
 function cacheChanged(prev: CachedChat[], next: CachedChat[]): boolean {
   if (prev.length !== next.length) return true;
-  const prevIds = new Set(prev.map((c) => c.id));
-  for (const c of next) {
-    if (!prevIds.has(c.id)) return true;
+
+  const prevMap = new Map<string, string>();
+  for (let i = 0; i < prev.length; i++) {
+    prevMap.set(prev[i].id, prev[i].name);
   }
-  const prevMap = new Map(prev.map((c) => [c.id, c.name]));
-  for (const c of next) {
-    if (prevMap.get(c.id) !== c.name) return true;
+
+  for (let i = 0; i < next.length; i++) {
+    const c = next[i];
+    if (!prevMap.has(c.id) || prevMap.get(c.id) !== c.name) {
+      return true;
+    }
   }
+
   return false;
 }
 
@@ -244,6 +257,7 @@ async function syncOnce(
 
     const changed = cacheChanged(memoryCache, chats);
     memoryCache = chats;
+    searchCache = chats.map((c) => (c.name || "").toLowerCase());
 
     if (workspace && changed) {
       await writeCacheFile(workspace, chats, cachedOwnerId, logger);
@@ -277,6 +291,7 @@ export async function startChatCacheSync(params: {
   if (workspace) {
     const cached = await readCacheFile(workspace, logger);
     memoryCache = cached.chats;
+    searchCache = memoryCache.map((c) => (c.name || "").toLowerCase());
     if (cached.ownerId) {
       cachedOwnerId = cached.ownerId;
     }
@@ -287,5 +302,12 @@ export async function startChatCacheSync(params: {
 }
 
 export function stopChatCacheSync(): void {
+  syncContext = null;
+}
+
+export function __resetChatCacheForTest(): void {
+  memoryCache = [];
+  searchCache = [];
+  cachedOwnerId = undefined;
   syncContext = null;
 }
