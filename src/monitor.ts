@@ -1362,12 +1362,24 @@ export async function startRingCentralMonitor(
     throw err;
   }
 
-  // Guard: if this WsManager already has an active subscription, skip.
-  // The framework's auto-restart may call startRingCentralMonitor multiple
-  // times; we must not create duplicate subscriptions on the same wsExt.
+  // Guard: if this WsManager already has an active subscription, skip creating new one
+  // but return a proper cleanup function that manages the abort signal.
+  // The framework's auto-restart may call startRingCentralMonitor multiple times;
+  // we must not create duplicate subscriptions on the same wsExt.
   if (mgr.subscribed) {
-    logger.info(`[${account.accountId}] WS subscription already active, skipping duplicate start`);
-    return () => {}; // no-op cleanup; the original cleanup owns the lifecycle
+    logger.info(`[${account.accountId}] WS subscription already active, returning existing cleanup`);
+    // Return a cleanup that only handles the abort signal, not the WS lifecycle
+    // The original cleanup owns the WS lifecycle
+    return () => {
+      isShuttingDown = true;
+      if (healthCheckTimer) {
+        clearInterval(healthCheckTimer);
+        healthCheckTimer = null;
+      }
+      stopChatCacheSync();
+      // Note: We don't call wsManagers.delete or mgr.wsExt.revoke() here
+      // because this is a duplicate start - the original cleanup owns the lifecycle
+    };
   }
   await ensureWsConnected(mgr, account, logger);
 
