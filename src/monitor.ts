@@ -1132,14 +1132,13 @@ async function processMessageWithPipeline(params: {
     if (!typingPostId) return;
     
     // Build progress text
-    const lines = [`> 🦞 ${botName} is thinking...`];
+    const lines = [`> 🦞 ${botName} is working...`];
     
     if (toolCalls.length > 0) {
       lines.push(`> `);
-      lines.push(`> **Tools:**`);
       for (const tool of toolCalls) {
-        const phaseIcon = tool.phase === "complete" ? "✅" : "🔄";
-        lines.push(`> ${phaseIcon} \`${tool.name || "unknown"}\``);
+        const statusText = tool.phase === "complete" ? "✅ Completed" : "🔄 Running";
+        lines.push(`> **${tool.name || "unknown"}** ${statusText}`);
       }
     }
     
@@ -1347,7 +1346,20 @@ async function deliverRingCentralReply(params: {
   }
 
   if (payload.text) {
-    const wrappedText = `> --------answer--------\n${payload.text}\n> ---------end----------`;
+    // Delete thinking message before sending final reply
+    if (typingPostId) {
+      try {
+        await deleteRingCentralMessage({
+          account,
+          chatId,
+          postId: typingPostId,
+        });
+        logger.debug(`[${account.accountId}] Deleted thinking message before final reply`);
+      } catch (err) {
+        logger.debug(`[${account.accountId}] Failed to delete thinking message: ${String(err)}`);
+      }
+    }
+    
     const chunkLimit = account.config.textChunkLimit ?? 4000;
     const chunkMode = core.channel.text.resolveChunkMode(
       config,
@@ -1355,38 +1367,25 @@ async function deliverRingCentralReply(params: {
       account.accountId,
     );
     const chunks = core.channel.text.chunkMarkdownTextWithMode(
-      wrappedText,
+      payload.text,
       chunkLimit,
       chunkMode,
     );
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       try {
-        if (i === 0 && typingPostId) {
-          const updateResult = await updateRingCentralMessage({
-            account,
-            chatId,
-            postId: typingPostId,
-            text: chunk,
-          });
-          logger.debug(
-            `[${account.accountId}] RC_POST_UPDATE_OK chatId=${chatId} postId=${typingPostId} len=${chunk.length}`,
-          );
-          if (updateResult?.postId) trackSentMessageId(updateResult.postId);
-        } else {
-          const sendResult = await sendRingCentralMessage({
-            account,
-            chatId,
-            text: chunk,
-          });
-          if (sendResult?.postId) trackSentMessageId(sendResult.postId);
-        }
+        const sendResult = await sendRingCentralMessage({
+          account,
+          chatId,
+          text: chunk,
+        });
+        if (sendResult?.postId) trackSentMessageId(sendResult.postId);
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         const errInfo = formatRcApiError(extractRcApiError(err, account.accountId));
         logger.error(`RingCentral message send failed: ${errInfo}`);
         logger.error(
-          `[${account.accountId}] RC_POST_UPDATE_FAIL chatId=${chatId} typingPostId=${typingPostId ?? ""} chunkIndex=${i} err=${errInfo}`,
+          `[${account.accountId}] RC_POST_SEND_FAIL chatId=${chatId} chunkIndex=${i} err=${errInfo}`,
         );
       }
     }
