@@ -107,9 +107,9 @@ function readNumberParam(
 }
 
 function resolveChannelId(params: Record<string, unknown>): string {
-  const chatId = readStringParam(params, "chatId") ?? readStringParam(params, "channelId");
+  const chatId = readStringParam(params, "chatId") ?? readStringParam(params, "channelId") ?? readStringParam(params, "target");
   if (!chatId) {
-    throw new Error("chatId or channelId is required");
+    throw new Error("chatId, channelId, or target is required");
   }
   const normalized = normalizeRingCentralTarget(chatId);
   if (!normalized) {
