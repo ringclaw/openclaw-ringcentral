@@ -1,5 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { summarizeChatInfo, summarizeEvent } from "./monitor.js";
+import { summarizeChatInfo, summarizeEvent, sanitizeAttachmentFilename } from "./monitor.js";
+
+describe("sanitizeAttachmentFilename", () => {
+  it("allows safe characters", () => {
+    expect(sanitizeAttachmentFilename("file-name_123.jpg")).toBe("file-name_123.jpg");
+    expect(sanitizeAttachmentFilename("DOCUMENT.PDF")).toBe("DOCUMENT.PDF");
+  });
+
+  it("replaces unsafe characters with underscores", () => {
+    expect(sanitizeAttachmentFilename("file/name.txt")).toBe("file_name.txt");
+    expect(sanitizeAttachmentFilename("file\\name.txt")).toBe("file_name.txt");
+    expect(sanitizeAttachmentFilename("file*name.txt")).toBe("file_name.txt");
+    expect(sanitizeAttachmentFilename("file?name.txt")).toBe("file_name.txt");
+    expect(sanitizeAttachmentFilename("file\"name.txt")).toBe("file_name.txt");
+    expect(sanitizeAttachmentFilename("file<name>.txt")).toBe("file_name_.txt");
+    expect(sanitizeAttachmentFilename("file|name.txt")).toBe("file_name.txt");
+    expect(sanitizeAttachmentFilename("file:name.txt")).toBe("file_name.txt");
+  });
+
+  it("neutralizes path traversal sequences", () => {
+    expect(sanitizeAttachmentFilename("../../../etc/passwd")).toBe("______etc_passwd");
+    expect(sanitizeAttachmentFilename("..\\..\\Windows\\System32")).toBe("____Windows_System32");
+    expect(sanitizeAttachmentFilename("file..name.txt")).toBe("file_name.txt");
+  });
+
+  it("provides fallback for empty or completely hidden names", () => {
+    expect(sanitizeAttachmentFilename("")).toBe("attachment");
+    expect(sanitizeAttachmentFilename(".")).toBe("attachment");
+    expect(sanitizeAttachmentFilename("..")).toBe("attachment");
+    expect(sanitizeAttachmentFilename("_")).toBe("attachment");
+  });
+});
 
 describe("summarizeChatInfo", () => {
   it("extracts only safe fields from chat object", () => {
