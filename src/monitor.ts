@@ -1110,53 +1110,130 @@ async function processMessageWithPipeline(params: {
     logger.error(`ringcentral: failed repairing session label: ${String(err)}`);
   }
 
-  // Send "thinking" indicator before dispatching reply (follows Google Chat pattern)
+  // Resolve bot name for thinking indicator
   const botName = resolveBotDisplayName({
     accountName: account.config.name,
     agentId: route.agentId,
     config,
   });
+
+  // Track typing state for cleanup
   let typingPostId: string | undefined;
-  try {
-    const thinkingResult = await sendRingCentralMessage({
-      account,
-      chatId,
-      text: `> 🦞 ${botName} is thinking...`,
-    });
-    typingPostId = thinkingResult?.postId;
-    if (typingPostId) trackSentMessageId(typingPostId);
-  } catch (err) {
-    logger.debug(`[${account.accountId}] Failed to send thinking indicator: ${String(err)}`);
-  }
+  let hasDelivered = false;
+  let thinkingSent = false; // Guard to prevent multiple thinking messages
+  const toolCalls: { name?: string; phase?: string }[] = []; // Track tool calls for progress
 
   logger.debug(
     `[${account.accountId}] Dispatching: isCommand=${hasControlCommand} authorized=${commandAuthorized} sessionKey=${route.sessionKey}`,
   );
 
+  // Helper to update thinking message with tool progress
+  const updateThinkingProgress = async () => {
+    if (!typingPostId) return;
+    
+    // Build progress text
+    const lines = [`> 🦞 ${botName} is working...`];
+    
+    if (toolCalls.length > 0) {
+      lines.push(`> `);
+      for (const tool of toolCalls) {
+        const statusText = tool.phase === "complete" ? "✅ Completed" : "🔄 Running";
+        lines.push(`> **${tool.name || "unknown"}** ${statusText}`);
+      }
+    }
+    
+    try {
+      await updateRingCentralMessage({
+        account,
+        chatId,
+        postId: typingPostId,
+        text: lines.join("\n"),
+      });
+    } catch (err) {
+      logger.debug(`[${account.accountId}] Failed to update thinking progress: ${String(err)}`);
+    }
+  };
+
+  // Extended dispatcher options with typing callbacks (onReplyStart/onIdle)
+  // These are supported at runtime but not in the type definitions yet
+  const dispatcherOptionsWithTyping = {
+    deliver: async (payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string }) => {
+      hasDelivered = true;
+      await deliverRingCentralReply({
+        payload,
+        account,
+        chatId,
+        core,
+        config,
+        statusSink,
+        typingPostId,
+      });
+      // Clear typingPostId after first delivery (it gets updated/deleted in deliverRingCentralReply)
+      typingPostId = undefined;
+    },
+    onError: (err: unknown, info: { kind: string }) => {
+      logger.error(
+        `[${account.accountId}] RingCentral ${info.kind} reply failed: ${String(err)}`,
+      );
+    },
+    // Send thinking indicator when model STARTS generating (not before)
+    // This prevents sending thinking when model decides NO_REPLY
+    // Guard: only send once per reply cycle to avoid duplicate messages on tool calls
+    onReplyStart: async () => {
+      if (thinkingSent) {
+        return; // Already sent thinking message, don't send another
+      }
+      thinkingSent = true;
+      try {
+        const thinkingResult = await sendRingCentralMessage({
+          account,
+          chatId,
+          text: `> 🦞 ${botName} is thinking...`,
+        });
+        typingPostId = thinkingResult?.postId;
+        if (typingPostId) trackSentMessageId(typingPostId);
+      } catch (err) {
+        logger.debug(`[${account.accountId}] Failed to send thinking indicator: ${String(err)}`);
+      }
+    },
+    onIdle: async () => {
+      // Cleanup typing indicator if model finished without delivering (e.g., NO_REPLY)
+      if (!hasDelivered && typingPostId) {
+        try {
+          await deleteRingCentralMessage({ account, chatId, postId: typingPostId });
+        } catch { /* ignore */ }
+        typingPostId = undefined;
+      }
+    },
+  } as Parameters<typeof core.channel.reply.dispatchReplyWithBufferedBlockDispatcher>[0]["dispatcherOptions"];
+
+  // Reply options with tool progress tracking
+  const replyOptionsWithToolProgress: Record<string, unknown> = {
+    // Track tool calls and update thinking message
+    onToolStart: async (payload: { name?: string; phase?: string }) => {
+      logger.debug(`[${account.accountId}] onToolStart callback fired: ${JSON.stringify(payload)}`);
+      const name = payload.name || "unknown";
+      // Check if this tool already exists in the list
+      const existingIndex = toolCalls.findIndex(t => t.name === name);
+      if (existingIndex >= 0) {
+        // Update existing tool (e.g., phase change)
+        toolCalls[existingIndex] = { name, phase: payload.phase };
+      } else {
+        // Add new tool
+        toolCalls.push({ name, phase: payload.phase });
+      }
+      await updateThinkingProgress();
+    },
+  };
+
   try {
-    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+    // Cast to any to bypass incomplete type definitions
+    // replyOptions is supported at runtime with onToolStart callback
+    await (core.channel.reply.dispatchReplyWithBufferedBlockDispatcher as any)({
       ctx: ctxPayload,
       cfg: config,
-      dispatcherOptions: {
-        deliver: async (payload) => {
-          await deliverRingCentralReply({
-            payload,
-            account,
-            chatId,
-            core,
-            config,
-            statusSink,
-            typingPostId,
-          });
-          // Only use typing message for first delivery
-          typingPostId = undefined;
-        },
-        onError: (err, info) => {
-          logger.error(
-            `[${account.accountId}] RingCentral ${info.kind} reply failed: ${String(err)}`,
-          );
-        },
-      },
+      dispatcherOptions: dispatcherOptionsWithTyping,
+      replyOptions: replyOptionsWithToolProgress,
     });
   } catch (err) {
     logger.error(`[${account.accountId}] Command/reply dispatch failed: ${String(err)}`);
@@ -1269,7 +1346,20 @@ async function deliverRingCentralReply(params: {
   }
 
   if (payload.text) {
-    const wrappedText = `> --------answer--------\n${payload.text}\n> ---------end----------`;
+    // Delete thinking message before sending final reply
+    if (typingPostId) {
+      try {
+        await deleteRingCentralMessage({
+          account,
+          chatId,
+          postId: typingPostId,
+        });
+        logger.debug(`[${account.accountId}] Deleted thinking message before final reply`);
+      } catch (err) {
+        logger.debug(`[${account.accountId}] Failed to delete thinking message: ${String(err)}`);
+      }
+    }
+    
     const chunkLimit = account.config.textChunkLimit ?? 4000;
     const chunkMode = core.channel.text.resolveChunkMode(
       config,
@@ -1277,38 +1367,25 @@ async function deliverRingCentralReply(params: {
       account.accountId,
     );
     const chunks = core.channel.text.chunkMarkdownTextWithMode(
-      wrappedText,
+      payload.text,
       chunkLimit,
       chunkMode,
     );
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       try {
-        if (i === 0 && typingPostId) {
-          const updateResult = await updateRingCentralMessage({
-            account,
-            chatId,
-            postId: typingPostId,
-            text: chunk,
-          });
-          logger.debug(
-            `[${account.accountId}] RC_POST_UPDATE_OK chatId=${chatId} postId=${typingPostId} len=${chunk.length}`,
-          );
-          if (updateResult?.postId) trackSentMessageId(updateResult.postId);
-        } else {
-          const sendResult = await sendRingCentralMessage({
-            account,
-            chatId,
-            text: chunk,
-          });
-          if (sendResult?.postId) trackSentMessageId(sendResult.postId);
-        }
+        const sendResult = await sendRingCentralMessage({
+          account,
+          chatId,
+          text: chunk,
+        });
+        if (sendResult?.postId) trackSentMessageId(sendResult.postId);
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         const errInfo = formatRcApiError(extractRcApiError(err, account.accountId));
         logger.error(`RingCentral message send failed: ${errInfo}`);
         logger.error(
-          `[${account.accountId}] RC_POST_UPDATE_FAIL chatId=${chatId} typingPostId=${typingPostId ?? ""} chunkIndex=${i} err=${errInfo}`,
+          `[${account.accountId}] RC_POST_SEND_FAIL chatId=${chatId} chunkIndex=${i} err=${errInfo}`,
         );
       }
     }
@@ -1362,12 +1439,24 @@ export async function startRingCentralMonitor(
     throw err;
   }
 
-  // Guard: if this WsManager already has an active subscription, skip.
-  // The framework's auto-restart may call startRingCentralMonitor multiple
-  // times; we must not create duplicate subscriptions on the same wsExt.
+  // Guard: if this WsManager already has an active subscription, skip creating new one
+  // but return a proper cleanup function that manages the abort signal.
+  // The framework's auto-restart may call startRingCentralMonitor multiple times;
+  // we must not create duplicate subscriptions on the same wsExt.
   if (mgr.subscribed) {
-    logger.info(`[${account.accountId}] WS subscription already active, skipping duplicate start`);
-    return () => {}; // no-op cleanup; the original cleanup owns the lifecycle
+    logger.info(`[${account.accountId}] WS subscription already active, returning existing cleanup`);
+    // Return a cleanup that only handles the abort signal, not the WS lifecycle
+    // The original cleanup owns the WS lifecycle
+    return () => {
+      isShuttingDown = true;
+      if (healthCheckTimer) {
+        clearInterval(healthCheckTimer);
+        healthCheckTimer = null;
+      }
+      stopChatCacheSync();
+      // Note: We don't call wsManagers.delete or mgr.wsExt.revoke() here
+      // because this is a duplicate start - the original cleanup owns the lifecycle
+    };
   }
   await ensureWsConnected(mgr, account, logger);
 

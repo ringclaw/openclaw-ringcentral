@@ -717,14 +717,25 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
         abortSignal: ctx.abortSignal,
         statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
-      return () => {
-        unregister?.();
-        ctx.setStatus({
-          accountId: account.accountId,
-          running: false,
-          lastStopAt: Date.now(),
+
+      // Return a Promise that stays pending until abortSignal fires.
+      // This is the correct pattern for OpenClaw's channel lifecycle:
+      // - The Promise resolves with a cleanup function when the channel should stop
+      // - Framework waits for this Promise before triggering auto-restart
+      // - abortSignal is the mechanism for graceful shutdown
+      return new Promise<() => void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => {
+          const cleanup = () => {
+            unregister?.();
+            ctx.setStatus({
+              accountId: account.accountId,
+              running: false,
+              lastStopAt: Date.now(),
+            });
+          };
+          resolve(cleanup);
         });
-      };
+      });
     },
     logoutAccount: async ({ cfg, accountId }) => {
       // Clear cached WebSocket manager for this account to ensure
