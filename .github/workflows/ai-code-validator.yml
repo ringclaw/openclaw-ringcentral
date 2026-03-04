@@ -1,0 +1,22 @@
+name: AI Code Validator
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  ai-code-validate:
+    name: AI Code Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: AI Code Validator
+        uses: raye-deng/ai-code-validator@v0.1.0
+        with:
+          threshold: 70
+          paths: 'src/**/*.ts,src/**/*.js'
+          fail-on-low-score: 'false'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
