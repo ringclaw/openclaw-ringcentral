@@ -511,15 +511,37 @@ export function isSenderAllowed(
   allowFrom: string[],
 ): boolean {
   if (allowFrom.includes("*")) return true;
+
+  // Exact match fast-path before normalization overhead
+  if (allowFrom.includes(senderId)) return true;
+
   const normalizedSenderId = normalizeUserId(senderId);
-  return allowFrom.some((entry) => {
-    const normalized = String(entry).trim().toLowerCase();
-    if (!normalized) return false;
-    if (normalized === normalizedSenderId) return true;
-    if (normalized.replace(/^(ringcentral|rc):/i, "") === normalizedSenderId) return true;
-    if (normalized.replace(/^user:/i, "") === normalizedSenderId) return true;
-    return false;
-  });
+  if (allowFrom.includes(normalizedSenderId)) return true;
+
+  // Pre-calculate valid prefixed permutations to avoid regex replace in the loop
+  const pRc = "rc:" + normalizedSenderId;
+  const pRingCentral = "ringcentral:" + normalizedSenderId;
+  const pUser = "user:" + normalizedSenderId;
+
+  // Use standard for loop to minimize callback overhead in hot paths
+  for (let i = 0; i < allowFrom.length; i++) {
+    const raw = allowFrom[i];
+    if (typeof raw !== "string" && typeof raw !== "number") continue;
+
+    const normalized = String(raw).trim().toLowerCase();
+    if (!normalized) continue;
+
+    if (
+      normalized === normalizedSenderId ||
+      normalized === pRc ||
+      normalized === pRingCentral ||
+      normalized === pUser
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function findGroupEntry(
