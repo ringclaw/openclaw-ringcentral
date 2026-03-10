@@ -516,19 +516,8 @@ export function isSenderAllowed(
     const normalized = String(entry).trim().toLowerCase();
     if (!normalized) return false;
     if (normalized === normalizedSenderId) return true;
-
-    // Performance optimization: string.startsWith + slice is 5-10x faster
-    // than regex replacement in a tight loop.
-    if (normalized.startsWith("rc:")) {
-      return normalized.slice(3) === normalizedSenderId;
-    }
-    if (normalized.startsWith("user:")) {
-      return normalized.slice(5) === normalizedSenderId;
-    }
-    if (normalized.startsWith("ringcentral:")) {
-      return normalized.slice(12) === normalizedSenderId;
-    }
-
+    if (normalized.replace(/^(ringcentral|rc):/i, "") === normalizedSenderId) return true;
+    if (normalized.replace(/^user:/i, "") === normalizedSenderId) return true;
     return false;
   });
 }
