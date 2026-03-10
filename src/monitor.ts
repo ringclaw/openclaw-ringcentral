@@ -726,8 +726,10 @@ async function processMessageWithPipeline(params: {
     : [];
   const dmPeerFromMembers = chatMembers.find((id) => id && id !== ownerIdNorm) || "";
 
+  // For Direct-type chats, always fall back to chatId when peer cannot be derived from members.
+  // chatId is guaranteed unique per Direct chat; using "" risks falling back to the wrong session.
   const dmPeerUserId = !isGroup
-    ? (dmPeerFromMembers || (senderIdNorm !== ownerIdNorm ? senderIdNorm : ""))
+    ? (dmPeerFromMembers || (senderIdNorm !== ownerIdNorm ? senderIdNorm : chatId))
     : "";
 
   // Map RingCentral chat types to openclaw peerKind:
@@ -752,12 +754,86 @@ async function processMessageWithPipeline(params: {
     },
   });
 
+  // Early selfOnly guard for non-group DMs: exit before writing any session metadata.
+  // This prevents Personal/Direct chats from polluting delivery context on the main session.
+  if (selfOnly && !isPersonalChat && !isGroup) {
+    logVerbose(core, `ignore non-personal DM in selfOnly mode: chatType=${chatType}`);
+    return;
+  }
+
+  // META-ONLY: Update session label/display metadata for group chats that have passed the
+  // allowlist check. Do NOT write meta for groups that are not tracked — this prevents
+  // unconfigured groups from overwriting the deliveryContext target on a shared session.
+  const configuredGroups = account.config.groups ?? {};
+  const isTrackedGroup = isGroup && Boolean(findGroupEntry(configuredGroups, chatId, chatName));
+  try {
+    if (isGroup && isTrackedGroup) {
+      const storePath = core.channel.session.resolveStorePath(config.session?.store, {
+        agentId: route.agentId,
+      });
+
+      // If RingCentral chat has no name (often true for Group chats), create a stable label
+      // by resolving up to 3 member first names and joining with commas.
+      let metaLabel: string;
+      if (chatName?.trim()) {
+        metaLabel = chatName.trim();
+      } else {
+        let fallbackParts: string[] = [];
+        try {
+          const memberIds = Array.isArray(chatInfo?.members) ? chatInfo!.members!.slice(0, 3) : [];
+          const memberNames = await Promise.all(
+            memberIds.map(async (id: string) => {
+              try {
+                const u = await getRingCentralUser({ account, userId: id });
+                return u?.firstName?.trim() || null;
+              } catch {
+                return null;
+              }
+            }),
+          );
+          fallbackParts = memberNames.filter((x): x is string => !!x);
+        } catch {
+          // ignore
+        }
+
+        metaLabel = fallbackParts.length > 0 ? fallbackParts.join(", ") : `chat:${chatId}`;
+      }
+
+      void core.channel.session
+        .recordSessionMetaFromInbound({
+          storePath,
+          sessionKey: route.sessionKey,
+          ctx: core.channel.reply.finalizeInboundContext({
+            Provider: "ringcentral",
+            Surface: "ringcentral",
+            From: `ringcentral:group:${chatId}`,
+            To: `ringcentral:${chatId}`,
+            OriginatingChannel: "ringcentral",
+            OriginatingTo: `ringcentral:${chatId}`,
+            ChatType: "channel",
+            AccountId: route.accountId,
+            SessionKey: route.sessionKey,
+            ConversationLabel: metaLabel,
+            GroupSpace: metaLabel,
+            GroupSubject: metaLabel,
+          }),
+        })
+        .catch((err) => {
+          logger.error(`ringcentral: meta-only session meta update failed: ${String(err)}`);
+        });
+    }
+  } catch (err) {
+    logger.error(`ringcentral: meta-only session meta update crashed: ${String(err)}`);
+  }
   logger.debug(`[${account.accountId}] Chat type: ${chatType}, isGroup: ${isGroup}`);
   logger.debug(
     `[${account.accountId}] resolvedRoute: channel=ringcentral accountId=${account.accountId} peerKind=${peerKind} peerId=${routePeerId} bindings=${Array.isArray((config as any)?.bindings) ? (config as any).bindings.length : 0} -> agentId=${(route as any)?.agentId ?? "(default)"} matchedBy=${(route as any)?.matchedBy ?? "unknown"}`,
   );
 
-  // In selfOnly mode, only allow "Personal" chat (conversation with yourself)
+  // In selfOnly mode, only allow "Personal" chat (conversation with yourself).
+  // This blocks both Direct DMs and Group/Team chats. Direct DMs already exit via the
+  // early guard above, but keeping this guard preserves the original selfOnly contract
+  // for group chats and serves as defense-in-depth for DMs.
   if (selfOnly && !isPersonalChat) {
     logVerbose(core, `ignore non-personal chat in selfOnly mode: chatType=${chatType}`);
     return;
