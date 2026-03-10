@@ -1334,10 +1334,11 @@ async function deliverRingCentralReply(params: {
         const loaded = await core.channel.media.fetchRemoteMedia(mediaUrl, {
           maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
         });
+        const rawFilename = loaded.filename ?? "attachment";
         const upload = await uploadRingCentralAttachment({
           account,
           chatId,
-          filename: loaded.filename ?? "attachment",
+          filename: sanitizeAttachmentFilename(rawFilename),
           buffer: loaded.buffer,
           contentType: loaded.contentType,
         });

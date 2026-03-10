@@ -34,7 +34,7 @@ import {
   getRingCentralChat,
 } from "./api.js";
 import { getRingCentralRuntime } from "./runtime.js";
-import { startRingCentralMonitor, clearRingCentralWsManager } from "./monitor.js";
+import { startRingCentralMonitor, clearRingCentralWsManager, sanitizeAttachmentFilename } from "./monitor.js";
 import {
   normalizeRingCentralTarget,
   isRingCentralChatTarget,
@@ -561,10 +561,11 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
       const loaded = await runtime.channel.media.fetchRemoteMedia(mediaUrl, {
         maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
       });
+      const rawFilename = loaded.filename ?? "attachment";
       const upload = await uploadRingCentralAttachment({
         account,
         chatId: to,
-        filename: loaded.filename ?? "attachment",
+        filename: sanitizeAttachmentFilename(rawFilename),
         buffer: loaded.buffer,
         contentType: loaded.contentType,
       });
