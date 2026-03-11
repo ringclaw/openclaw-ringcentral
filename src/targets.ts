@@ -4,11 +4,27 @@ export function normalizeRingCentralTarget(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  // Remove common prefixes
-  let normalized = trimmed
-    .replace(/^(ringcentral|rc):/i, "")
-    .replace(/^(chat|user|group|team):/i, "")
-    .trim();
+  // Cleanly preserve original casing without regexes
+  let normalized = trimmed;
+  let workStr = normalized.toLowerCase();
+
+  if (workStr.startsWith("ringcentral:")) {
+    normalized = normalized.slice(12).trimStart();
+    workStr = normalized.toLowerCase();
+  } else if (workStr.startsWith("rc:")) {
+    normalized = normalized.slice(3).trimStart();
+    workStr = normalized.toLowerCase();
+  }
+
+  if (workStr.startsWith("chat:")) {
+    normalized = normalized.slice(5).trimStart();
+  } else if (workStr.startsWith("user:")) {
+    normalized = normalized.slice(5).trimStart();
+  } else if (workStr.startsWith("group:")) {
+    normalized = normalized.slice(6).trimStart();
+  } else if (workStr.startsWith("team:")) {
+    normalized = normalized.slice(5).trimStart();
+  }
 
   if (!normalized) return null;
   return normalized;
