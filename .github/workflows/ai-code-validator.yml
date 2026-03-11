@@ -22,7 +22,6 @@ jobs:
         uses: raye-deng/ai-code-validator@main
         with:
           threshold: 70
-          paths: 'src/**/*.ts,src/**/*.js'
           fail-on-low-score: 'false'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 

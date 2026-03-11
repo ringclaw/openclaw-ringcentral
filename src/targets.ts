@@ -8,23 +8,27 @@ export function normalizeRingCentralTarget(raw: string): string | null {
   let normalized = trimmed;
   let workStr = normalized.toLowerCase();
 
+  // Replicate exact regex replace logic without intermediate trims
   if (workStr.startsWith("ringcentral:")) {
-    normalized = normalized.slice(12).trimStart();
+    normalized = normalized.slice(12);
     workStr = normalized.toLowerCase();
   } else if (workStr.startsWith("rc:")) {
-    normalized = normalized.slice(3).trimStart();
+    normalized = normalized.slice(3);
     workStr = normalized.toLowerCase();
   }
 
   if (workStr.startsWith("chat:")) {
-    normalized = normalized.slice(5).trimStart();
+    normalized = normalized.slice(5);
   } else if (workStr.startsWith("user:")) {
-    normalized = normalized.slice(5).trimStart();
+    normalized = normalized.slice(5);
   } else if (workStr.startsWith("group:")) {
-    normalized = normalized.slice(6).trimStart();
+    normalized = normalized.slice(6);
   } else if (workStr.startsWith("team:")) {
-    normalized = normalized.slice(5).trimStart();
+    normalized = normalized.slice(5);
   }
+
+  // Only trim at the very end just like the original code `.replace(...).replace(...).trim()`
+  normalized = normalized.trim();
 
   if (!normalized) return null;
   return normalized;
