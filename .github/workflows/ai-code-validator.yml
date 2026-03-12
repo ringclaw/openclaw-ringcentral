@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: AI Code Validator
-        uses: raye-deng/ai-code-validator@v2
+        uses: raye-deng/ai-code-validator@v1
         with:
           threshold: 70
           paths: 'src/**/*.ts,src/**/*.js'
