@@ -23,6 +23,5 @@ jobs:
         with:
           threshold: 70
           paths: 'src/**/*.ts,src/**/*.js'
-          fail-on-low-score: 'false'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-issues: 'false'
 
