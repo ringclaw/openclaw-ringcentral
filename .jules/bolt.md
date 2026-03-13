@@ -1,0 +1,3 @@
+## 2024-05-24 - Optimize `isSenderAllowed` Array Loop and String Matching
+**Learning:** In hot paths that evaluate string prefixes over arrays (e.g. evaluating `allowFrom` entries), using `Regex.replace()` inside array methods like `.some()` introduces significant memory allocation and execution overhead.
+**Action:** Replace `Regex.replace()` inside higher-order functions with native `String.prototype.startsWith()` and `String.prototype.slice()` in standard `for` loops, and utilize exact-match fast paths (`Array.prototype.includes()`) for measurable performance gains.
