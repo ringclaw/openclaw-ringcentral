@@ -18,8 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install dependencies for action
+        run: npm install web-tree-sitter
+
       - name: AI Code Validator
-        uses: raye-deng/open-code-review@v1.9.1
+        uses: raye-deng/open-code-review@v1
         with:
           threshold: 70
           paths: 'src/**/*.ts,src/**/*.js'
