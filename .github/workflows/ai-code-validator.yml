@@ -25,8 +25,8 @@ jobs:
         uses: raye-deng/open-code-review@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_PATH: ${{ github.workspace }}/node_modules
         with:
           threshold: 70
-          paths: 'src/**/*.ts,src/**/*.js'
           fail-on-low-score: 'false'
 
