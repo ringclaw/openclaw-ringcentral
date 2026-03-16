@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: npm install web-tree-sitter
+        run: npm install web-tree-sitter@0.22.6
 
       - name: AI Code Validator
         uses: raye-deng/open-code-review@v1
