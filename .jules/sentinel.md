@@ -7,3 +7,8 @@
 **Vulnerability:** File downloads via `downloadAttachment` directly used the unsanitized `attachment.name` from the RingCentral payload when saving to disk, risking path traversal (e.g., `../../../etc/passwd`).
 **Learning:** External API payloads containing filenames must never be trusted blindly. The existing `sanitizeFilename` utility was insufficient because it stripped dots entirely, which would destroy valid file extensions. A dedicated file-attachment sanitizer was needed.
 **Prevention:** Implement and use `sanitizeAttachmentFilename` for all external media downloads. This function preserves extensions while neutralizing `..` path traversal sequences and replacing invalid path characters. Ensure tests verify these specific attack patterns.
+
+## 2026-03-16 - Outbound File Download Path Traversal / Malicious Filenames
+**Vulnerability:** External media URLs downloaded for outgoing attachments used the untrusted `loaded.filename` directly when constructing the `uploadRingCentralAttachment` payload. While this isn't saving to the local disk, passing unsanitized filenames to external APIs can cause path traversal or unexpected behaviors on the receiving end.
+**Learning:** We sanitized inbound attachments correctly (from RingCentral -> local disk), but neglected outbound attachments (from external URL -> RingCentral). Both boundaries require sanitization.
+**Prevention:** Apply the `sanitizeAttachmentFilename` helper to `loaded.filename` for outbound attachments in `src/channel.ts` and `src/monitor.ts` before passing it to `uploadRingCentralAttachment`.
