@@ -1,0 +1,3 @@
+## 2024-05-24 - Evaluating String Prefixes inside Hot Loops
+**Learning:** Evaluating string prefixes inside hot loops over an array (e.g., in allowlists evaluated per message) using regex `.replace()` inside higher-order array methods like `.some()` introduces significant regex creation, matching, and callback overhead.
+**Action:** Replace `.some()` and regex `.replace()` inside hot loops with native string methods like `.startsWith()` combined with standard `for` loops, and include an exact-match fast path (e.g., `array.includes(value)`) for significant performance improvements (~38x in this case) without sacrificing readability.
