@@ -64,6 +64,8 @@
     "@ringcentral/sdk": "^5.0.0",
     "@ringcentral/subscriptions": "^5.0.0",
     "isomorphic-ws": "^5.0.0",
+    "tree-sitter-wasms": "0.1.10",
+    "web-tree-sitter": "0.22.6",
     "ws": "^8.18.0",
     "zod": "^4.3.6"
   },
