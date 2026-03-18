@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install dependencies for Code Review
         run: npm install web-tree-sitter@0.22.6 tree-sitter-wasms@0.1.10
