@@ -512,14 +512,25 @@ export function isSenderAllowed(
 ): boolean {
   if (allowFrom.includes("*")) return true;
   const normalizedSenderId = normalizeUserId(senderId);
-  return allowFrom.some((entry) => {
-    const normalized = String(entry).trim().toLowerCase();
-    if (!normalized) return false;
-    if (normalized === normalizedSenderId) return true;
-    if (normalized.replace(/^(ringcentral|rc):/i, "") === normalizedSenderId) return true;
-    if (normalized.replace(/^user:/i, "") === normalizedSenderId) return true;
-    return false;
-  });
+
+  // Exact-match fast path
+  if (allowFrom.includes(normalizedSenderId)) return true;
+
+  for (let i = 0; i < allowFrom.length; i++) {
+    const entry = String(allowFrom[i]).trim().toLowerCase();
+    if (!entry) continue;
+
+    if (entry === normalizedSenderId) return true;
+    if (entry.startsWith("ringcentral:")) {
+      if (entry.slice(12) === normalizedSenderId) return true;
+    } else if (entry.startsWith("rc:")) {
+      if (entry.slice(3) === normalizedSenderId) return true;
+    } else if (entry.startsWith("user:")) {
+      if (entry.slice(5) === normalizedSenderId) return true;
+    }
+  }
+
+  return false;
 }
 
 function findGroupEntry(
