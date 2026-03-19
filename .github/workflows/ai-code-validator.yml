@@ -26,6 +26,7 @@ jobs:
         env:
           NODE_PATH: ${{ github.workspace }}/node_modules
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           threshold: 70
           fail-on-low-score: 'false'
