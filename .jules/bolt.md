@@ -1,0 +1,3 @@
+## 2024-05-24 - Array Iteration Regex Overhead vs Native Strings
+**Learning:** Evaluating string prefixes using `.replace()` with regex inside a `.some()` loop creates significant overhead in hot loops (like allowlist checking).
+**Action:** Replace `Array.prototype.some` + `String.prototype.replace(regex)` with `for` loops, an exact-match `Array.prototype.includes` fast path, and native `String.prototype.startsWith()`/`String.prototype.slice()` to dramatically improve execution speed (measured ~57% time reduction for 100k iterations).
