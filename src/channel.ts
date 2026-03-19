@@ -34,6 +34,7 @@ import {
   getRingCentralChat,
 } from "./api.js";
 import { getRingCentralRuntime } from "./runtime.js";
+import { sanitizeAttachmentFilename } from "./monitor.js";
 import { startRingCentralMonitor, clearRingCentralWsManager } from "./monitor.js";
 import {
   normalizeRingCentralTarget,
@@ -564,7 +565,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
       const upload = await uploadRingCentralAttachment({
         account,
         chatId: to,
-        filename: loaded.filename ?? "attachment",
+        filename: loaded.filename ? sanitizeAttachmentFilename(loaded.filename) : "attachment",
         buffer: loaded.buffer,
         contentType: loaded.contentType,
       });
