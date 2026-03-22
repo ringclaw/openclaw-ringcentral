@@ -18,11 +18,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install dependencies for action
+        run: npm install web-tree-sitter@0.22.6 tree-sitter-wasms@0.1.10
+
       - name: AI Code Validator
-        uses: raye-deng/ai-code-validator@v0.2.0
+        uses: raye-deng/open-code-review@v1
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           threshold: 70
-          paths: 'src/**/*.ts,src/**/*.js'
           fail-on-low-score: 'false'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
