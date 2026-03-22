@@ -61,18 +61,31 @@ export function searchCachedChats(query: string): CachedChat[] {
 export function findDirectChatByMember(memberId: string): CachedChat | undefined {
   if (!cachedOwnerId) {
     // Fallback: match any Direct chat containing memberId (less precise)
-    return memoryCache.find(
-      (c) => c.type === "Direct" && c.members?.includes(memberId),
-    );
+    for (let i = 0; i < memoryCache.length; i++) {
+      const c = memoryCache[i];
+      if (c.type === "Direct" && c.members) {
+        for (let j = 0; j < c.members.length; j++) {
+          if (c.members[j] === memberId) return c;
+        }
+      }
+    }
+    return undefined;
   }
   // Exact match: Direct chat whose members are exactly {selfId, memberId}
-  return memoryCache.find(
-    (c) =>
-      c.type === "Direct" &&
-      c.members?.length === 2 &&
-      c.members.includes(cachedOwnerId!) &&
-      c.members.includes(memberId),
-  );
+  for (let i = 0; i < memoryCache.length; i++) {
+    const c = memoryCache[i];
+    if (c.type === "Direct" && c.members && c.members.length === 2) {
+      const m0 = c.members[0];
+      const m1 = c.members[1];
+      if (
+        (m0 === cachedOwnerId && m1 === memberId) ||
+        (m0 === memberId && m1 === cachedOwnerId)
+      ) {
+        return c;
+      }
+    }
+  }
+  return undefined;
 }
 
 function resolveCachePath(workspace: string): string {
