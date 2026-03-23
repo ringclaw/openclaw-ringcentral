@@ -1337,7 +1337,7 @@ async function deliverRingCentralReply(params: {
         const upload = await uploadRingCentralAttachment({
           account,
           chatId,
-          filename: loaded.filename ?? "attachment",
+          filename: (loaded.filename ? sanitizeAttachmentFilename(loaded.filename) : undefined) ?? "attachment",
           buffer: loaded.buffer,
           contentType: loaded.contentType,
         });
