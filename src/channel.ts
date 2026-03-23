@@ -638,40 +638,47 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedRingCentralAccount> = {
       // Helper to check if we've exceeded the timeout
       const isTimedOut = () => Date.now() - start > effectiveTimeout;
 
-      for (const groupId of groupIds) {
-        // Check timeout before each API call
-        if (isTimedOut()) {
-          results.push({
-            id: groupId,
-            ok: false,
-            error: "Audit timed out",
-          });
-          continue;
-        }
+      // ⚡ Bolt: Use batched Promise.all to fetch chats in parallel to reduce overall audit time
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < groupIds.length; i += BATCH_SIZE) {
+        const batch = groupIds.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(async (groupId) => {
+            // Check timeout before each API call
+            if (isTimedOut()) {
+              return {
+                id: groupId,
+                ok: false,
+                error: "Audit timed out",
+              };
+            }
 
-        try {
-          // Wrap the API call with a timeout
-          const timeRemaining = effectiveTimeout - (Date.now() - start);
-          const chatPromise = getRingCentralChat({ account, chatId: groupId });
-          const timeoutPromise = new Promise<null>((_, reject) =>
-            setTimeout(() => reject(new Error("Request timed out")), Math.max(timeRemaining, 1000))
-          );
+            try {
+              // Wrap the API call with a timeout
+              const timeRemaining = effectiveTimeout - (Date.now() - start);
+              const chatPromise = getRingCentralChat({ account, chatId: groupId });
+              const timeoutPromise = new Promise<null>((_, reject) =>
+                setTimeout(() => reject(new Error("Request timed out")), Math.max(timeRemaining, 1000))
+              );
 
-          const chat = await Promise.race([chatPromise, timeoutPromise]);
-          results.push({
-            id: groupId,
-            ok: Boolean(chat),
-            name: chat?.name,
-            type: chat?.type,
-            error: chat ? undefined : "Chat not found or no access",
-          });
-        } catch (err) {
-          results.push({
-            id: groupId,
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+              const chat = await Promise.race([chatPromise, timeoutPromise]);
+              return {
+                id: groupId,
+                ok: Boolean(chat),
+                name: chat?.name,
+                type: chat?.type,
+                error: chat ? undefined : "Chat not found or no access",
+              };
+            } catch (err) {
+              return {
+                id: groupId,
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              };
+            }
+          })
+        );
+        results.push(...batchResults);
       }
 
       return {
