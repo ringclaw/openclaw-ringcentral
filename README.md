@@ -5,275 +5,163 @@ RingCentral Team Messaging channel plugin for OpenClaw. Enables bidirectional me
 ## Features
 
 - WebSocket-based real-time messaging (no public webhook required)
-- JWT authentication
-- Self-only mode (talk to AI as yourself)
-- Support for text messages and attachments
+- Bot Add-in support with static token authentication
+- Optional Private App for reading chat history and cross-chat actions
 - Typing indicators
-- Adaptive Cards support (create, read, update, delete)
-- **Message Actions** - Read, edit, delete messages and get chat info via agent tools
+- Agent actions: tasks, notes, events, adaptive cards CRUD
+- Group chat support with @mention gating
+- Markdown to RingCentral Mini-Markdown conversion
+
+## Architecture
+
+| Client | Auth | Role |
+|--------|------|------|
+| **Bot Add-in** (required) | Static token | WebSocket monitoring, sending messages, replying |
+| **Private App** (optional) | JWT | Reading chat history, cross-chat actions (notes/events/cards) |
+
+The bot client handles all inbound/outbound messaging. The private app client is used when the bot lacks permissions (e.g., reading private chats for summarization, creating resources in chats where the bot isn't a member).
 
 ## Prerequisites
 
 1. A RingCentral account with Team Messaging enabled
-2. A RingCentral REST API App (not Bot Add-in)
+2. A RingCentral Bot Add-in app (get static token from Developer Portal)
+3. (Optional) A RingCentral REST API App for Private App credentials
 
 ## Installation
 
 ```bash
-npm install -g openclaw@latest
-openclaw onboard --install-daemon
-
 openclaw plugins install openclaw-ringcentral
-openclaw config set channels.ringcentral.enabled true
-openclaw config set channels.ringcentral.credentials.clientId "your-client-id"
-openclaw config set channels.ringcentral.credentials.clientSecret "your-client-secret"
-openclaw config set channels.ringcentral.credentials.jwt "your-jwt-token"
-openclaw config set channels.ringcentral.credentials.server "https://platform.ringcentral.com"
-openclaw gateway restart
 ```
-
-Or install from tarball:
-
-```bash
-npm pack
-openclaw plugins install ./openclaw-ringcentral-<version>.tgz
-```
-
-## RingCentral App Setup
-
-1. Go to [RingCentral Developer Portal](https://developers.ringcentral.com/)
-2. Create a new app:
-   - **App Type**: REST API App (most common)
-   - **Auth**: JWT auth flow
-3. Add permissions:
-   - **Team Messaging** - Read and send messages
-   - **WebSocket Subscriptions** - Real-time event subscriptions
-   - **Read Accounts** - Read user information
-   - **Read Messages** - Read messages
-   - **WebSocket** - WebSocket access
-4. Generate a JWT token for your user
 
 ## Configuration
 
-Add to `~/.openclaw/openclaw.json`:
+### Minimal (Bot only)
 
 ```json
 {
   "channels": {
     "ringcentral": {
       "enabled": true,
+      "botToken": "your-bot-static-token"
+    }
+  }
+}
+```
+
+### With Private App (for chat summarization and cross-chat actions)
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "enabled": true,
+      "botToken": "your-bot-static-token",
       "credentials": {
         "clientId": "your-client-id",
         "clientSecret": "your-client-secret",
-        "jwt": "your-jwt-token",
-        "server": "https://platform.ringcentral.com"
+        "jwt": "your-jwt-token"
       }
     }
   }
 }
 ```
 
-Or use environment variables:
+### Environment Variables
 
-```bash
-export RINGCENTRAL_CLIENT_ID="your-client-id"
-export RINGCENTRAL_CLIENT_SECRET="your-client-secret"
-export RINGCENTRAL_JWT="your-jwt-token"
-```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `RINGCENTRAL_BOT_TOKEN` | Yes | Bot static token |
+| `RINGCENTRAL_CLIENT_ID` | No | Private App client ID |
+| `RINGCENTRAL_CLIENT_SECRET` | No | Private App client secret |
+| `RINGCENTRAL_JWT` | No | Private App JWT token |
+| `RINGCENTRAL_SERVER` | No | API server URL (default: `https://platform.ringcentral.com`) |
 
-### Configuration Options
+### All Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | boolean | `false` | Enable the RingCentral channel |
-| `credentials.clientId` | string | - | RingCentral app client ID |
-| `credentials.clientSecret` | string | - | RingCentral app client secret |
-| `credentials.jwt` | string | - | JWT token for authentication |
-| `credentials.server` | string | `https://platform.ringcentral.com` | RingCentral API server URL |
-| `selfOnly` | boolean | `true` | Only respond to JWT user in Personal chat |
-| `name` | string | - | Bot display name |
-| `textChunkLimit` | number | `4000` | Maximum characters per message chunk |
-| `dmPolicy` | string | `"allowlist"` | DM policy (only when `selfOnly: false`) |
-| `groupPolicy` | string | `"allowlist"` | Group policy (only when `selfOnly: false`) |
+| `botToken` | string | - | Bot static token (required) |
+| `credentials.clientId` | string | - | Private App client ID |
+| `credentials.clientSecret` | string | - | Private App client secret |
+| `credentials.jwt` | string | - | Private App JWT token |
+| `server` | string | `https://platform.ringcentral.com` | API server URL |
+| `botExtensionId` | string | auto-detected | Bot extension ID for @mention detection |
+| `selfOnly` | boolean | `true` | Only respond in DMs with the bot |
+| `groupPolicy` | string | `"disabled"` | Group policy: `disabled`, `allowlist`, `open` |
+| `groups.<id>.enabled` | boolean | `true` | Enable specific group |
+| `groups.<id>.requireMention` | boolean | inherited | Require @mention in this group |
+| `groups.<id>.systemPrompt` | string | - | Custom system prompt for this group |
+| `groups.<id>.users` | array | - | Allowed user IDs in this group |
+| `requireMention` | boolean | `true` | Global default: require @mention in groups |
+| `dm.policy` | string | `"open"` | DM policy: `disabled`, `allowlist`, `pairing`, `open` |
+| `dm.allowFrom` | array | - | User IDs allowed to DM |
+| `textChunkLimit` | number | `4000` | Max characters per message chunk |
+| `allowBots` | boolean | `false` | Allow messages from other bots |
+| `actions.messages` | boolean | `true` | Allow agent to read/edit/delete messages |
+| `actions.channelInfo` | boolean | `true` | Allow agent to get chat info |
+| `actions.tasks` | boolean | `true` | Allow agent to manage tasks |
+| `actions.events` | boolean | `true` | Allow agent to manage events |
+| `actions.notes` | boolean | `true` | Allow agent to manage notes |
 
-> **Note:** When `selfOnly: true` (default), the bot only responds to the JWT user in their Personal chat. All other policy settings (`dmPolicy`, `allowFrom`, `groupPolicy`, etc.) are ignored.
+## RingCentral App Setup
+
+### Bot Add-in (Required)
+
+1. Go to [RingCentral Developer Portal](https://developers.ringcentral.com/)
+2. Create a **Bot Add-in** app
+3. Add permissions: **Team Messaging**, **WebSocket Subscriptions**
+4. Copy the bot's static token
+
+### Private App (Optional)
+
+1. Create a **REST API App** with JWT auth flow
+2. Add permissions: **Team Messaging**, **WebSocket Subscriptions**, **Read Accounts**, **Read Messages**
+3. Generate a JWT token for your user
+
+## Agent Actions
+
+The plugin provides agent tools for RingCentral resource management:
+
+| Action | Description |
+|--------|-------------|
+| `send-message` | Send a message to a chat |
+| `read-messages` | Read message history |
+| `edit-message` | Edit an existing message |
+| `delete-message` | Delete a message |
+| `channel-info` | Get chat/channel information |
+| `list-tasks` / `create-task` / `update-task` / `complete-task` / `delete-task` | Task management |
+| `list-events` / `create-event` / `update-event` / `delete-event` | Calendar event management |
+| `list-notes` / `create-note` / `update-note` / `delete-note` / `publish-note` | Note management |
+
+Actions use the Private App client when available (for cross-chat access), falling back to the Bot client.
 
 ## Usage
 
-1. Start the openclaw gateway:
+1. Start the OpenClaw gateway:
 
 ```bash
 openclaw gateway run
 ```
 
-2. Open RingCentral app and go to your "Personal" chat (conversation with yourself)
-
-3. Send a message - the AI will respond!
-
-## How It Works
-
-This plugin uses JWT authentication, which means:
-
-- **Messages appear from your own account** (not a separate bot)
-- **Default mode (`selfOnly: true`)**: Only processes messages you send to yourself
-- **Personal chat only**: By default, only responds in your "Personal" chat
-
-This is ideal for personal AI assistant use without needing to set up a separate bot account.
-
-## Advanced Configuration
-
-### Allow Group Chats
-
-To enable the bot in group chats:
-
-```json
-{
-  "channels": {
-    "ringcentral": {
-      "enabled": true,
-      "selfOnly": false,
-      "groupPolicy": "open",
-      "dmPolicy": "open"
-    }
-  }
-}
-```
-
-### Multiple Accounts
-
-```json
-{
-  "channels": {
-    "ringcentral": {
-      "enabled": true,
-      "defaultAccount": "work",
-      "accounts": {
-        "work": {
-          "credentials": {
-            "clientId": "work-client-id",
-            "clientSecret": "work-client-secret",
-            "jwt": "work-jwt-token"
-          }
-        },
-        "personal": {
-          "credentials": {
-            "clientId": "personal-client-id",
-            "clientSecret": "personal-client-secret",
-            "jwt": "personal-jwt-token"
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-## Message Actions
-
-The plugin supports message actions that allow the AI agent to read, edit, and delete messages in RingCentral chats.
-
-### Supported Actions
-
-| Action | Description | Parameters |
-|--------|-------------|------------|
-| `read` | Fetch message history from a chat | `chatId`, `limit` (optional), `pageToken` (optional) |
-| `edit` | Edit an existing message | `chatId`, `messageId`, `message` |
-| `delete` | Delete a message | `chatId`, `messageId` |
-| `channel-info` | Get chat/channel information | `chatId` |
-
-### Configuration
-
-Message actions are enabled by default. To disable specific actions:
-
-```json
-{
-  "channels": {
-    "ringcentral": {
-      "actions": {
-        "messages": false,
-        "channelInfo": false
-      }
-    }
-  }
-}
-```
-
-### Usage Examples
-
-Ask the AI to read messages from a chat:
-
-```
-Read the last 10 messages from chat 123456789
-```
-
-Ask the AI to summarize a conversation:
-
-```
-Summarize the messages in chat 123456789
-```
-
-### Chat Name to ID Mapping
-
-RingCentral requires a numeric `chatId` for message actions. The agent can remember chat name to ID mappings:
-
-1. Tell the agent the chatId once:
-   ```
-   The Engineering Team chat ID is 123456789, please remember this
-   ```
-
-2. Then refer to it by name:
-   ```
-   Read messages from Engineering Team
-   ```
-
-The agent uses OpenClaw's memory system to store and retrieve these mappings.
+2. Message the bot in RingCentral — the AI will respond!
 
 ## Troubleshooting
 
-### "Unauthorized for this grant type"
+### Bot not responding
 
-Your app type is wrong. Create a **REST API App** (not Bot Add-in) with JWT auth flow.
+- Verify `botToken` is correct
+- Check that the bot has **Team Messaging** and **WebSocket Subscriptions** permissions
+- Check gateway logs: `openclaw gateway logs`
 
-### "In order to call this API endpoint, application needs to have [Read Accounts, WebSocket Subscriptions, Team Messaging, WebSocket, Read Messages] permission"
+### Actions failing with 404
 
-Add **WebSocket Subscriptions** permission in your app settings. Permission changes may take a few minutes to propagate.
-
-### Messages not being processed
-
-1. Check that `selfOnly` mode matches your use case
-2. Verify you're sending messages in a "Personal" chat (conversation with yourself)
-3. Check gateway logs: `tail -f /tmp/openclaw/openclaw-*.log | grep ringcentral`
+- The bot can only access chats it's a member of
+- For cross-chat actions, configure Private App credentials
 
 ### Rate limit errors
 
 RingCentral has API rate limits. If you see "Request rate exceeded", wait a minute before retrying.
-
-## Supported Team Messaging APIs
-
-This plugin implements the following RingCentral Team Messaging APIs:
-
-### Implemented
-
-| Category | APIs | Required Scopes |
-|----------|------|-----------------|
-| **Chats** | List Chats, Get Chat | `TeamMessaging` |
-| **Conversations** | List, Get, Create/Open | `TeamMessaging` |
-| **Posts** | List Posts, Get Post, Create, Update, Delete | `TeamMessaging` |
-| **Adaptive Cards** | Create, Get, Update, Delete | `TeamMessaging` |
-| **Profile** | Get Person, Get Current User, Get Company Info | `ReadAccounts`, `TeamMessaging` |
-| **Attachments** | Upload, Download | `TeamMessaging` |
-| **Favorite Chats** | List, Add, Remove | `TeamMessaging` |
-| **Tasks** | List, Create, Get, Update, Delete, Complete | `TeamMessaging` |
-| **Calendar Events** | List, Create, Get, Update, Delete | `TeamMessaging` |
-| **Notes** | List, Create, Get, Update, Delete, Lock, Unlock, Publish | `TeamMessaging`, `Glip` |
-| **Incoming Webhooks** | List, Create, Get, Delete, Activate, Suspend | `TeamMessaging` |
-| **Teams** | List, Create, Get, Update, Delete, Join, Leave, Add/Remove Members, Archive/Unarchive | `TeamMessaging` |
-
-### Not Yet Implemented
-
-| Category | APIs | Required Scopes |
-|----------|------|-----------------|
-| **Compliance Exports** | List, Create, Get | `TeamMessaging` (admin) |
 
 ## License
 
