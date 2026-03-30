@@ -154,7 +154,7 @@ async function connectAndListen(
   });
 }
 
-function handleWSMessage(
+export function handleWSMessage(
   arr: unknown[],
   opts: MonitorOptions,
   sentPosts: Map<string, number>,
