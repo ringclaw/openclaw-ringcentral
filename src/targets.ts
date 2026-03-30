@@ -1,70 +1,51 @@
-// Target ID normalization and resolution for RingCentral
+// Target ID normalization for RingCentral.
+// Format: rc:{kind}:{id} where kind is dm, group, channel, user, chat
 
-export function normalizeRingCentralTarget(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
+export const RC_PREFIX = "ringcentral";
 
-  // Remove common prefixes
-  let normalized = trimmed
-    .replace(/^(ringcentral|rc):/i, "")
-    .replace(/^(chat|user|group|team):/i, "")
-    .trim();
-
-  if (!normalized) return null;
-  return normalized;
-}
-
-export function isRingCentralChatTarget(target: string): boolean {
-  const normalized = normalizeRingCentralTarget(target);
-  if (!normalized) return false;
-  // RingCentral chat IDs are typically numeric strings
-  return /^\d+$/.test(normalized);
-}
-
-export function isRingCentralUserTarget(target: string): boolean {
-  const normalized = normalizeRingCentralTarget(target);
-  if (!normalized) return false;
-  // User IDs can be numeric or prefixed
-  return /^\d+$/.test(normalized) || normalized.toLowerCase().startsWith("user:");
-}
-
-export function formatRingCentralChatTarget(chatId: string): string {
-  return `rc:chat:${chatId}`;
-}
-
-export function formatRingCentralUserTarget(userId: string): string {
-  return `rc:user:${userId}`;
-}
-
-export function parseRingCentralTarget(target: string): {
-  type: "chat" | "user" | "unknown";
-  id: string;
-} {
-  const trimmed = target.trim();
-  
-  // Check for explicit type prefixes
-  const chatMatch = trimmed.match(/^(?:ringcentral|rc)?:?chat:(.+)$/i);
-  if (chatMatch) {
-    return { type: "chat", id: chatMatch[1].trim() };
+export function parseTarget(raw: string): { kind: string; id: string } | null {
+  // ringcentral:dm:123 or ringcentral:group:123 or rc:chat:123
+  const prefixes = [`${RC_PREFIX}:`, "rc:"];
+  for (const prefix of prefixes) {
+    if (raw.startsWith(prefix)) {
+      const rest = raw.slice(prefix.length);
+      const colonIdx = rest.indexOf(":");
+      if (colonIdx > 0) {
+        return { kind: rest.slice(0, colonIdx), id: rest.slice(colonIdx + 1) };
+      }
+      return { kind: "chat", id: rest };
+    }
   }
-
-  const userMatch = trimmed.match(/^(?:ringcentral|rc)?:?user:(.+)$/i);
-  if (userMatch) {
-    return { type: "user", id: userMatch[1].trim() };
+  // Bare numeric ID
+  if (/^\d+$/.test(raw)) {
+    return { kind: "chat", id: raw };
   }
+  return null;
+}
 
-  const groupMatch = trimmed.match(/^(?:ringcentral|rc)?:?(?:group|team):(.+)$/i);
-  if (groupMatch) {
-    return { type: "chat", id: groupMatch[1].trim() };
-  }
+export function buildTarget(kind: string, id: string): string {
+  return `${RC_PREFIX}:${kind}:${id}`;
+}
 
-  // Remove any remaining prefix
-  const cleaned = trimmed.replace(/^(?:ringcentral|rc):/i, "").trim();
-  
-  // Default to chat for numeric IDs
-  if (/^\d+$/.test(cleaned)) {
-    return { type: "chat", id: cleaned };
-  }
+export function buildDmTarget(userId: string): string {
+  return buildTarget("dm", userId);
+}
 
-  return { type: "unknown", id: cleaned };
+export function buildGroupTarget(chatId: string): string {
+  return buildTarget("group", chatId);
+}
+
+export function buildChannelTarget(chatId: string): string {
+  return buildTarget("channel", chatId);
+}
+
+export function extractChatId(target: string): string | null {
+  const parsed = parseTarget(target);
+  return parsed?.id ?? null;
+}
+
+export function normalizeTarget(raw: string): string | undefined {
+  const parsed = parseTarget(raw);
+  if (!parsed) return undefined;
+  return buildTarget(parsed.kind, parsed.id);
 }
