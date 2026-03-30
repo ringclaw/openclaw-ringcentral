@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
-import { ringcentralDock, ringcentralPlugin } from "./src/channel.js";
+import { ringcentralPlugin, ringcentralDock } from "./src/channel.js";
 import { setRingCentralRuntime } from "./src/runtime.js";
 
 const plugin = {

@@ -1,92 +1,102 @@
-import { SDK } from "@ringcentral/sdk";
+// JWT authentication for Private App (optional read client).
+// Inspired by RingClaw auth.go — direct fetch, no SDK dependency.
 
-import type { ResolvedRingCentralAccount } from "./accounts.js";
+import type { TokenResponse, WSTokenResponse } from "./types.js";
 
-export type SDKInstance = InstanceType<typeof SDK>;
-
-const sdkCache = new Map<string, { key: string; sdk: SDKInstance; platform: ReturnType<SDKInstance["platform"]> }>();
-
-function buildAuthKey(account: ResolvedRingCentralAccount): string {
-  return `${account.clientId}:${account.server}:${account.jwt?.slice(0, 20)}`;
+export interface AuthState {
+  accessToken: string;
+  expiresAt: number;
 }
 
-async function getSDKInstance(account: ResolvedRingCentralAccount): Promise<{
-  sdk: SDKInstance;
-  platform: ReturnType<SDKInstance["platform"]>;
-}> {
-  const key = buildAuthKey(account);
-  const cached = sdkCache.get(account.accountId);
-  
-  if (cached && cached.key === key) {
-    // Check if still logged in
-    const platform = cached.platform;
-    try {
-      const loggedIn = await platform.loggedIn();
-      if (loggedIn) {
-        return cached;
-      }
-    } catch {
-      // Token expired or invalid, need to re-login
-    }
-  }
+let cachedAuth: AuthState | null = null;
+let refreshPromise: Promise<AuthState> | null = null;
 
-  if (!account.clientId || !account.clientSecret) {
-    throw new Error("RingCentral clientId and clientSecret are required");
-  }
-
-  if (!account.jwt) {
-    throw new Error("RingCentral JWT token is required for authentication");
-  }
-
-  const sdk = new SDK({
-    server: account.server,
-    clientId: account.clientId,
-    clientSecret: account.clientSecret,
-  });
-
-  const platform = sdk.platform();
-
-  // Login using JWT
-  await platform.login({ jwt: account.jwt });
-
-  const entry = { key, sdk, platform };
-  sdkCache.set(account.accountId, entry);
-  return entry;
+export function invalidateToken(): void {
+  cachedAuth = null;
 }
 
-export async function getRingCentralSDK(
-  account: ResolvedRingCentralAccount,
-): Promise<SDKInstance> {
-  const { sdk } = await getSDKInstance(account);
-  return sdk;
-}
-
-export async function getRingCentralPlatform(
-  account: ResolvedRingCentralAccount,
-): Promise<ReturnType<SDKInstance["platform"]>> {
-  const { platform } = await getSDKInstance(account);
-  return platform;
-}
-
-export async function getRingCentralAccessToken(
-  account: ResolvedRingCentralAccount,
+export async function getAccessToken(
+  serverUrl: string,
+  clientId: string,
+  clientSecret: string,
+  jwt: string,
 ): Promise<string> {
-  const { platform } = await getSDKInstance(account);
-  const authData = await platform.auth().data();
-  const token = authData?.access_token;
-  if (!token) {
-    throw new Error("Missing RingCentral access token");
+  if (cachedAuth && Date.now() < cachedAuth.expiresAt - 60_000) {
+    return cachedAuth.accessToken;
   }
-  return token;
+  if (refreshPromise) return (await refreshPromise).accessToken;
+
+  refreshPromise = refreshToken(serverUrl, clientId, clientSecret, jwt);
+  try {
+    cachedAuth = await refreshPromise;
+    return cachedAuth.accessToken;
+  } finally {
+    refreshPromise = null;
+  }
 }
 
-export async function refreshRingCentralToken(
-  account: ResolvedRingCentralAccount,
-): Promise<void> {
-  const { platform } = await getSDKInstance(account);
-  await platform.refresh();
+async function refreshToken(
+  serverUrl: string,
+  clientId: string,
+  clientSecret: string,
+  jwt: string,
+): Promise<AuthState> {
+  const url = `${serverUrl}/restapi/oauth/token`;
+  const body = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion: jwt,
+  });
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+    },
+    body: body.toString(),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Token request failed HTTP ${resp.status}: ${text}`);
+  }
+  const data = (await resp.json()) as TokenResponse;
+  return {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + data.expires_in * 1000,
+  };
 }
 
-export function clearRingCentralAuth(accountId: string): void {
-  sdkCache.delete(accountId);
+export async function getWSToken(
+  serverUrl: string,
+  accessToken: string,
+): Promise<WSTokenResponse> {
+  const url = `${serverUrl}/restapi/oauth/wstoken`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (resp.status === 401) {
+    invalidateToken();
+    throw new Error("Token expired, invalidated for retry");
+  }
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`WS token request failed HTTP ${resp.status}: ${text}`);
+  }
+  return (await resp.json()) as WSTokenResponse;
+}
+
+export async function getBotWSToken(
+  serverUrl: string,
+  botToken: string,
+): Promise<WSTokenResponse> {
+  const url = `${serverUrl}/restapi/oauth/wstoken`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${botToken}` },
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Bot WS token request failed HTTP ${resp.status}: ${text}`);
+  }
+  return (await resp.json()) as WSTokenResponse;
 }
