@@ -38,7 +38,7 @@ describe("getAccessToken", () => {
 
   it("throws on HTTP error", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: "bad" }, 401));
-    await expect(getAccessToken(...args)).rejects.toThrow("Token request failed HTTP 401");
+    await expect(getAccessToken(...args)).rejects.toThrow("Token request failed (HTTP 401)");
   });
 
   it("invalidateToken forces re-fetch", async () => {
@@ -88,7 +88,7 @@ describe("getWSToken", () => {
   it("throws on other HTTP errors", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: "server" }, 500));
     await expect(getWSToken("https://platform.ringcentral.com", "tok")).rejects.toThrow(
-      "WS token request failed HTTP 500",
+      "WS token request failed (HTTP 500)",
     );
   });
 });
@@ -105,7 +105,7 @@ describe("getBotWSToken", () => {
   it("throws on HTTP error", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: "denied" }, 403));
     await expect(getBotWSToken("https://platform.ringcentral.com", "bot-tok")).rejects.toThrow(
-      "Bot WS token request failed HTTP 403",
+      "Bot WS token request failed (HTTP 403)",
     );
   });
 });

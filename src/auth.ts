@@ -55,8 +55,7 @@ async function refreshToken(
     body: body.toString(),
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Token request failed HTTP ${resp.status}: ${text}`);
+    throw new Error(`Token request failed (HTTP ${resp.status}). Check credentials and server URL.`);
   }
   const data = (await resp.json()) as TokenResponse;
   return {
@@ -79,8 +78,7 @@ export async function getWSToken(
     throw new Error("Token expired, invalidated for retry");
   }
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`WS token request failed HTTP ${resp.status}: ${text}`);
+    throw new Error(`WS token request failed (HTTP ${resp.status}). Check access token validity.`);
   }
   return (await resp.json()) as WSTokenResponse;
 }
@@ -95,8 +93,7 @@ export async function getBotWSToken(
     headers: { Authorization: `Bearer ${botToken}` },
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Bot WS token request failed HTTP ${resp.status}: ${text}`);
+    throw new Error(`Bot WS token request failed (HTTP ${resp.status}). Check bot token validity.`);
   }
   return (await resp.json()) as WSTokenResponse;
 }

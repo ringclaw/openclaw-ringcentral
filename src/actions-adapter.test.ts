@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { getEnabledActions, handleAction, type ActionName } from "./actions-adapter.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { getEnabledActions, handleAction, __testing, type ActionName } from "./actions-adapter.js";
 import * as actions from "./actions.js";
 
 vi.mock("./actions.js", () => ({
@@ -26,6 +26,11 @@ vi.mock("./actions.js", () => ({
 
 const mockClient = {} as any;
 
+beforeEach(() => {
+  __testing.pendingActions.clear();
+  vi.clearAllMocks();
+});
+
 describe("getEnabledActions", () => {
   it("returns all actions by default", () => {
     const all = getEnabledActions();
@@ -34,7 +39,8 @@ describe("getEnabledActions", () => {
     expect(all).toContain("create-task");
     expect(all).toContain("create-event");
     expect(all).toContain("create-note");
-    expect(all.length).toBe(19);
+    expect(all).toContain("confirm-action");
+    expect(all.length).toBe(20);
   });
 
   it("excludes messages when disabled", () => {
@@ -81,13 +87,18 @@ describe("handleAction", () => {
     expect(actions.actionReadMessages).toHaveBeenCalledWith(mockClient, "c1", 10);
   });
 
-  it("routes edit-message", async () => {
-    await handleAction(mockClient, "edit-message", { chatId: "c1", postId: "p1", text: "updated" });
+  it("routes edit-message (requires confirmation)", async () => {
+    const result = await handleAction(mockClient, "edit-message", { chatId: "c1", postId: "p1", text: "updated" }) as any;
+    expect(result.requiresConfirmation).toBe(true);
+    // Confirm and verify execution
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionEditMessage).toHaveBeenCalledWith(mockClient, "c1", "p1", "updated");
   });
 
-  it("routes delete-message", async () => {
-    await handleAction(mockClient, "delete-message", { chatId: "c1", postId: "p1" });
+  it("routes delete-message (requires confirmation)", async () => {
+    const result = await handleAction(mockClient, "delete-message", { chatId: "c1", postId: "p1" }) as any;
+    expect(result.requiresConfirmation).toBe(true);
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionDeleteMessage).toHaveBeenCalledWith(mockClient, "c1", "p1");
   });
 
@@ -120,7 +131,9 @@ describe("handleAction", () => {
     await handleAction(mockClient, "send-message", { chat_id: "c2", message: "yo" });
     expect(actions.actionSendMessage).toHaveBeenCalledWith(mockClient, "c2", "yo");
 
-    await handleAction(mockClient, "delete-message", { chat_id: "c2", messageId: "m1" });
+    const result = await handleAction(mockClient, "delete-message", { chat_id: "c2", messageId: "m1" }) as any;
+    expect(result.requiresConfirmation).toBe(true);
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionDeleteMessage).toHaveBeenCalledWith(mockClient, "c2", "m1");
   });
 
@@ -129,19 +142,122 @@ describe("handleAction", () => {
     expect(actions.actionCreateTask).toHaveBeenCalledWith(mockClient, "c1", "Task via title", undefined);
   });
 
-  it("supports id alias for taskId/eventId/noteId", async () => {
-    await handleAction(mockClient, "delete-task", { id: "t99" });
+  it("supports id alias for taskId/eventId/noteId (via confirmation)", async () => {
+    let result: any;
+
+    result = await handleAction(mockClient, "delete-task", { id: "t99" });
+    expect(result.requiresConfirmation).toBe(true);
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionDeleteTask).toHaveBeenCalledWith(mockClient, "t99");
 
-    await handleAction(mockClient, "delete-event", { id: "e99" });
+    result = await handleAction(mockClient, "delete-event", { id: "e99" });
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionDeleteEvent).toHaveBeenCalledWith(mockClient, "e99");
 
-    await handleAction(mockClient, "delete-note", { id: "n99" });
+    result = await handleAction(mockClient, "delete-note", { id: "n99" });
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionDeleteNote).toHaveBeenCalledWith(mockClient, "n99");
   });
 
   it("returns error for unknown action", async () => {
     const result = await handleAction(mockClient, "unknown-action" as ActionName, {});
     expect(result).toEqual({ success: false, error: "Unknown action: unknown-action" });
+  });
+
+  describe("chat scope validation", () => {
+    it("blocks chat-scoped action when chatId differs from sessionChatId", async () => {
+      const result = await handleAction(
+        mockClient,
+        "send-message",
+        { chatId: "evil-chat", text: "hi" },
+        "session-chat",
+      );
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining("Action scope violation"),
+      });
+      expect(actions.actionSendMessage).not.toHaveBeenCalled();
+    });
+
+    it("allows chat-scoped action when chatId matches sessionChatId", async () => {
+      await handleAction(
+        mockClient,
+        "send-message",
+        { chatId: "session-chat", text: "hi" },
+        "session-chat",
+      );
+      expect(actions.actionSendMessage).toHaveBeenCalledWith(mockClient, "session-chat", "hi");
+    });
+
+    it("allows action when no sessionChatId is provided", async () => {
+      await handleAction(mockClient, "send-message", { chatId: "any-chat", text: "hi" });
+      expect(actions.actionSendMessage).toHaveBeenCalledWith(mockClient, "any-chat", "hi");
+    });
+
+    it("allows non-chat-scoped actions with different chatId", async () => {
+      const result = await handleAction(
+        mockClient,
+        "delete-task",
+        { id: "t1" },
+        "session-chat",
+      ) as any;
+      // delete-task is a protected action, so it returns confirmation instead
+      expect(result.requiresConfirmation).toBe(true);
+    });
+  });
+
+  describe("confirmation flow", () => {
+    it("returns confirmation for protected actions", async () => {
+      const result = await handleAction(mockClient, "delete-note", { noteId: "n1" }) as any;
+      expect(result.requiresConfirmation).toBe(true);
+      expect(result.confirmationId).toBeTruthy();
+      expect(result.summary).toContain("delete-note");
+      expect(result.summary).toContain("n1");
+      expect(actions.actionDeleteNote).not.toHaveBeenCalled();
+    });
+
+    it("executes action after confirmation", async () => {
+      const result = await handleAction(mockClient, "delete-note", { noteId: "n1" }) as any;
+      const nonce = result.confirmationId;
+
+      await handleAction(mockClient, "confirm-action", { nonce });
+      expect(actions.actionDeleteNote).toHaveBeenCalledWith(mockClient, "n1");
+    });
+
+    it("rejects invalid confirmation nonce", async () => {
+      const result = await handleAction(mockClient, "confirm-action", { nonce: "bad-nonce" }) as any;
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid or expired");
+    });
+
+    it("rejects reuse of confirmation nonce", async () => {
+      const result = await handleAction(mockClient, "delete-task", { id: "t1" }) as any;
+      const nonce = result.confirmationId;
+
+      await handleAction(mockClient, "confirm-action", { nonce });
+      const reuse = await handleAction(mockClient, "confirm-action", { nonce }) as any;
+      expect(reuse.success).toBe(false);
+      expect(reuse.error).toContain("Invalid or expired");
+    });
+
+    it("does not require confirmation for non-protected actions", async () => {
+      await handleAction(mockClient, "send-message", { chatId: "c1", text: "hi" });
+      expect(actions.actionSendMessage).toHaveBeenCalledWith(mockClient, "c1", "hi");
+    });
+
+    it("does not require confirmation for read actions", async () => {
+      await handleAction(mockClient, "list-tasks", { chatId: "c1" });
+      expect(actions.actionListTasks).toHaveBeenCalledWith(mockClient, "c1");
+    });
+
+    it("requires confirmation for edit-message", async () => {
+      const result = await handleAction(mockClient, "edit-message", { chatId: "c1", postId: "p1", text: "new" }) as any;
+      expect(result.requiresConfirmation).toBe(true);
+    });
+
+    it("requires confirmation for update-event", async () => {
+      const result = await handleAction(mockClient, "update-event", { eventId: "e1", title: "new" }) as any;
+      expect(result.requiresConfirmation).toBe(true);
+    });
   });
 });

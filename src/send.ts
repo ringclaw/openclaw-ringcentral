@@ -2,6 +2,7 @@
 
 import type { RingCentralClient } from "./client.js";
 import { markdownToMiniMarkdown } from "./markdown.js";
+import { validateMediaUrl } from "./url-validator.js";
 
 export interface SendOptions {
   client: RingCentralClient;
@@ -17,6 +18,7 @@ export async function sendMessage(opts: SendOptions): Promise<{ postId: string }
 
   if (mediaUrl) {
     try {
+      validateMediaUrl(mediaUrl);
       const resp = await fetch(mediaUrl);
       if (resp.ok) {
         const buf = Buffer.from(await resp.arrayBuffer());
