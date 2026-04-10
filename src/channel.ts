@@ -24,6 +24,7 @@ import { buildDmTarget, buildGroupTarget, extractChatId, normalizeTarget, RC_PRE
 import type { RingCentralConfig, ResolvedAccount } from "./types.js";
 import { getEnabledActions, handleAction, type ActionName } from "./actions-adapter.js";
 import { getRingCentralRuntime } from "./runtime.js";
+import { setOwnerId, getOwnerId } from "./identity.js";
 
 function getRcConfig(cfg: OpenClawConfig): RingCentralConfig {
   const channels = (cfg as Record<string, unknown>).channels as Record<string, unknown> | undefined;
@@ -81,6 +82,14 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
           const ext = await botClient.getExtensionInfo();
           botExtensionId = String(ext.id);
         } catch { /* continue without */ }
+      }
+
+      // Cache the private app owner identity for Self Only mode verification
+      if (hasPrivateApp(account)) {
+        try {
+          const ownerExt = await readClient.getExtensionInfo();
+          setOwnerId(String(ownerExt.id));
+        } catch { /* continue without — selfOnly will reject all if not cached */ }
       }
 
       setStatus({ state: "connecting" } as any);
@@ -190,7 +199,8 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
           )
         : createBotClient(account.server, account.botToken);
 
-      const result = await handleAction(client, ctx.action as ActionName, ctx.params);
+      const sessionChatId = (ctx as any).toolContext?.currentChannelId as string | undefined;
+      const result = await handleAction(client, ctx.action as ActionName, ctx.params, sessionChatId);
       return { content: result, details: result } as any;
     },
   },
@@ -212,6 +222,14 @@ async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const chatId = post.groupId;
   const text = post.text ?? "";
   const senderId = post.creatorId;
+
+  // Self Only mode: only process messages from the cached private app owner
+  if (account.config.selfOnly) {
+    const ownerId = getOwnerId();
+    if (!ownerId || senderId !== ownerId) {
+      return;
+    }
+  }
 
   // Determine chat type
   let chatType: "direct" | "group" | "channel" = "direct";
