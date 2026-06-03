@@ -120,6 +120,35 @@ pnpm test
 pnpm typecheck
 ```
 
+## Live Smoke Test
+
+The GitHub Actions workflow `RingCentral Live Smoke` validates the real RingCentral API path without starting OpenClaw and without any LLM secrets.
+
+Configure the GitHub Environment `ringcentral-live` with these secrets:
+
+| Secret | Description |
+| --- | --- |
+| `RC_BOT_TOKEN` | Bot static token used to send and delete the test message |
+| `RC_USER_CLIENT_ID` | Owner JWT app client ID |
+| `RC_USER_CLIENT_SECRET` | Owner JWT app client secret |
+| `RC_USER_JWT_TOKEN` | Owner JWT token used to read recent history |
+| `RC_E2E_CHAT_ID` | Test chat/group ID |
+| `RC_SERVER_URL` | Optional API server URL, default `https://platform.ringcentral.com` |
+
+Run the workflow manually from GitHub Actions. It sends a unique test message, reads it back through owner history, exercises `ringcentral_get_recent_messages`, and deletes the test message by default.
+
+Local live verification is also available:
+
+```bash
+RC_E2E_ENABLED=true \
+RC_BOT_TOKEN=... \
+RC_USER_CLIENT_ID=... \
+RC_USER_CLIENT_SECRET=... \
+RC_USER_JWT_TOKEN=... \
+RC_E2E_CHAT_ID=... \
+pnpm test:live:ringcentral
+```
+
 ## License
 
 MIT

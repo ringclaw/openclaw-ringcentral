@@ -7,6 +7,7 @@
   "license": "MIT",
   "scripts": {
     "test": "vitest run",
+    "test:live:ringcentral": "RC_E2E_REQUIRED=true vitest run src/live/ringcentral-live.test.ts --testTimeout=60000",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
