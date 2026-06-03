@@ -43,6 +43,25 @@ describe("extractPostFromWsFrame", () => {
     expect(extractPostFromWsFrame(event)).toEqual(expect.objectContaining({ id: "post-1" }));
   });
 
+  it("extracts Hermes-style array PostAdded bodies", () => {
+    expect(
+      extractPostFromWsFrame([
+        { type: "ServerNotification", status: 200 },
+        {
+          event: "/team-messaging/v1/posts",
+          body: {
+            eventType: "PostAdded",
+            id: "post-2",
+            groupId: "chat-1",
+            text: "Hello from body eventType",
+            creatorId: "user-2",
+            creationTime: "2026-01-01T00:00:00Z",
+          },
+        },
+      ]),
+    ).toEqual(expect.objectContaining({ id: "post-2", text: "Hello from body eventType" }));
+  });
+
   it("ignores non-PostAdded events", () => {
     const [, event] = makeWSEvent({ event: "/team-messaging/v1/posts?eventType=PostChanged" });
     expect(extractPostFromWsFrame(event)).toBeNull();
