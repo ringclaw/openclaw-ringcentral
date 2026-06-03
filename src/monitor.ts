@@ -56,7 +56,7 @@ export class RingCentralWebSocketMonitor {
   private async connectAndListen(log: (...args: unknown[]) => void): Promise<void> {
     const { client, onConnected, abortSignal } = this.opts;
     const wsToken = await client.createWebSocketToken();
-    const ws = new WebSocket(wsToken.uri);
+    const ws = new WebSocket(buildWebSocketUrl(wsToken));
     let pongTimer: ReturnType<typeof setTimeout> | undefined;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
     let connected = false;
@@ -171,6 +171,17 @@ export class RingCentralWebSocketMonitor {
     log(`[rc-monitor] received post chatId=${post.groupId} creatorId=${post.creatorId}`);
     this.opts.onMessage(post);
   }
+}
+
+export function buildWebSocketUrl(wsToken: { uri: string; ws_access_token?: string }): string {
+  if (!wsToken.ws_access_token) {
+    return wsToken.uri;
+  }
+  const url = new URL(wsToken.uri);
+  if (!url.searchParams.has("access_token")) {
+    url.searchParams.set("access_token", wsToken.ws_access_token);
+  }
+  return url.toString();
 }
 
 export async function startMonitor(opts: MonitorOptions): Promise<void> {

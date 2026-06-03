@@ -342,6 +342,8 @@ function startBotWebSocketWait(params: {
   const abortController = new AbortController();
   const connected = createDeferred<void>();
   const received = createDeferred<Post>();
+  connected.promise.catch(() => undefined);
+  received.promise.catch(() => undefined);
   const monitor = new RingCentralWebSocketMonitor({
     client: params.botClient,
     ownCreatorId: params.botPersonId,
@@ -497,7 +499,7 @@ function maskId(value: unknown): string {
   if (!raw) {
     return "<masked>";
   }
-  return `<masked:length=${raw.length}:tail=${raw.slice(-4)}>`;
+  return `<masked:length=${raw.length}>`;
 }
 
 function logSafe(event: string, details: Record<string, boolean | number | string> = {}): void {
