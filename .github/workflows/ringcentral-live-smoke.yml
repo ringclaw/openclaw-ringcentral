@@ -1,6 +1,9 @@
 name: RingCentral Live Smoke
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       record_count:
@@ -28,9 +31,9 @@ jobs:
       RC_E2E_ENABLED: "true"
       RC_SERVER_URL: ${{ secrets.RC_SERVER_URL || 'https://platform.ringcentral.com' }}
       RC_E2E_CHAT_ID: ${{ secrets.RC_E2E_CHAT_ID }}
-      RC_E2E_RECORD_COUNT: ${{ inputs.record_count }}
-      RC_E2E_CLEANUP: ${{ inputs.cleanup }}
-      RC_E2E_WS_TIMEOUT_MS: ${{ inputs.ws_timeout_ms }}
+      RC_E2E_RECORD_COUNT: ${{ inputs.record_count || '50' }}
+      RC_E2E_CLEANUP: ${{ github.event_name == 'workflow_dispatch' && inputs.cleanup == false && 'false' || 'true' }}
+      RC_E2E_WS_TIMEOUT_MS: ${{ inputs.ws_timeout_ms || '30000' }}
       RC_BOT_TOKEN: ${{ secrets.RC_BOT_TOKEN }}
       RC_USER_CLIENT_ID: ${{ secrets.RC_USER_CLIENT_ID }}
       RC_USER_CLIENT_SECRET: ${{ secrets.RC_USER_CLIENT_SECRET }}
