@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractPostFromWsFrame, markSentPost, shouldProcessPost } from "./monitor.js";
+import { buildWebSocketUrl, extractPostFromWsFrame, markSentPost, shouldProcessPost } from "./monitor.js";
 import { ANSWER_START } from "./shared.js";
 
 function makeWSEvent(overrides?: Record<string, unknown>) {
@@ -75,5 +75,25 @@ describe("markSentPost", () => {
     markSentPost(sentPosts, "p1");
     expect(sentPosts.has("p1")).toBe(true);
     expect(sentPosts.get("p1")).toBeGreaterThan(0);
+  });
+});
+
+describe("buildWebSocketUrl", () => {
+  it("adds ws access token as access_token query param", () => {
+    expect(buildWebSocketUrl({ uri: "wss://example.test/ws", ws_access_token: "token-1" })).toBe(
+      "wss://example.test/ws?access_token=token-1",
+    );
+  });
+
+  it("preserves existing query params", () => {
+    expect(buildWebSocketUrl({ uri: "wss://example.test/ws?x=1", ws_access_token: "token-1" })).toBe(
+      "wss://example.test/ws?x=1&access_token=token-1",
+    );
+  });
+
+  it("does not replace an existing access token", () => {
+    expect(buildWebSocketUrl({ uri: "wss://example.test/ws?access_token=existing", ws_access_token: "token-1" })).toBe(
+      "wss://example.test/ws?access_token=existing",
+    );
   });
 });
