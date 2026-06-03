@@ -16,10 +16,15 @@ export function markdownToMiniMarkdown(text: string): string {
   // Strip inline code backticks
   result = result.replace(/`([^`]+)`/g, "$1");
 
-  // Convert markdown images to just URL
-  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$2");
+  // Convert markdown images to URL (only http/https protocols)
+  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) =>
+    /^https?:\/\//i.test(url) ? url : (alt || ""),
+  );
 
-  // Keep links as-is — RC supports [text](url)
+  // Sanitize links — strip non-http(s) protocols
+  result = result.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (_m, text, url) =>
+    /^https?:\/\//i.test(url) ? `[${text}](${url})` : text,
+  );
 
   // Strip horizontal rules
   result = result.replace(/^[-*_]{3,}\s*$/gm, "");

@@ -24,6 +24,36 @@ describe("markdownToMiniMarkdown", () => {
     expect(markdownToMiniMarkdown("![alt](https://img.png)")).toBe("https://img.png");
   });
 
+  it("strips javascript: image URIs and falls back to alt text", () => {
+    expect(markdownToMiniMarkdown("![click me](javascript:void)")).toBe("click me");
+  });
+
+  it("strips data: image URIs", () => {
+    expect(markdownToMiniMarkdown("![](data:text/html,payload)")).toBe("");
+  });
+
+  it("strips file: image URIs", () => {
+    expect(markdownToMiniMarkdown("![secret](file:///etc/passwd)")).toBe("secret");
+  });
+
+  it("strips javascript: link URIs and keeps text", () => {
+    expect(markdownToMiniMarkdown("[click](javascript:void)")).toBe("click");
+  });
+
+  it("strips javascript: image URIs with nested parens", () => {
+    // Regex stops at first ), leaving trailing ) — acceptable degradation
+    const result = markdownToMiniMarkdown("![xss](javascript:alert(1))");
+    expect(result).not.toContain("javascript:");
+  });
+
+  it("keeps valid https links", () => {
+    expect(markdownToMiniMarkdown("[click](https://example.com)")).toBe("[click](https://example.com)");
+  });
+
+  it("keeps valid http links", () => {
+    expect(markdownToMiniMarkdown("[click](http://example.com)")).toBe("[click](http://example.com)");
+  });
+
   it("preserves plain text", () => {
     expect(markdownToMiniMarkdown("hello world")).toBe("hello world");
   });
