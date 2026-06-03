@@ -365,6 +365,9 @@ function startBotWebSocketWait(params: {
         received.resolve(post);
       }
     },
+    onDiagnostic: (event, details) => {
+      logSafe("bot_ws_state", sanitizeDiagnostic(event, details));
+    },
     log: () => undefined,
   });
   const monitorDone = monitor.start().catch((err) => {
@@ -481,6 +484,12 @@ function summarizeSafeError(err: unknown): string {
   if (err instanceof TimeoutError) {
     return "timeout";
   }
+  if (err instanceof Error) {
+    const subscriptionStatus = err.message.match(/^WebSocket subscription failed: status=(\d+)$/)?.[1];
+    if (subscriptionStatus) {
+      return `HTTP ${subscriptionStatus}`;
+    }
+  }
   return "failed";
 }
 
@@ -507,6 +516,19 @@ function logSafe(event: string, details: Record<string, boolean | number | strin
     .map(([key, value]) => `${key}=${value}`)
     .join(" ");
   console.log(`[ringcentral-live] event=${event}${suffix ? ` ${suffix}` : ""}`);
+}
+
+function sanitizeDiagnostic(
+  state: string,
+  details: Record<string, boolean | number | string> = {},
+): Record<string, boolean | number | string> {
+  const safe: Record<string, boolean | number | string> = { state };
+  for (const [key, value] of Object.entries(details)) {
+    if (typeof value === "boolean" || typeof value === "number") {
+      safe[key] = value;
+    }
+  }
+  return safe;
 }
 
 function createDeferred<T>() {

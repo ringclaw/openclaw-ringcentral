@@ -2,7 +2,7 @@
 
 import type { RingCentralClient } from "./client.js";
 import { ANSWER_START } from "./shared.js";
-import type { Post, WSConnectionDetails, WSEvent } from "./types.js";
+import type { Post, WSEvent } from "./types.js";
 
 export interface MonitorOptions {
   client: RingCentralClient;
@@ -12,6 +12,7 @@ export interface MonitorOptions {
   onMessage: (post: Post) => void;
   onConnected?: () => void;
   onDisconnected?: (error?: Error) => void;
+  onDiagnostic?: (event: string, details?: Record<string, boolean | number | string>) => void;
   abortSignal: AbortSignal;
   log?: (...args: unknown[]) => void;
 }
@@ -54,7 +55,7 @@ export class RingCentralWebSocketMonitor {
   }
 
   private async connectAndListen(log: (...args: unknown[]) => void): Promise<void> {
-    const { client, onConnected, abortSignal } = this.opts;
+    const { client, onConnected, onDiagnostic, abortSignal } = this.opts;
     const wsToken = await client.createWebSocketToken();
     const ws = new WebSocket(buildWebSocketUrl(wsToken));
     let pongTimer: ReturnType<typeof setTimeout> | undefined;
@@ -78,6 +79,7 @@ export class RingCentralWebSocketMonitor {
     return new Promise<void>((resolve, reject) => {
       ws.addEventListener("open", () => {
         log("[rc-monitor] WebSocket connected");
+        onDiagnostic?.("ws_open");
       });
 
       ws.addEventListener("message", (event) => {
@@ -93,24 +95,28 @@ export class RingCentralWebSocketMonitor {
         }
 
         if (isConnectionDetails(parsed)) {
+          onDiagnostic?.("ws_connection_details", { status: readFrameStatus(parsed) ?? 0 });
           ws.send(
             JSON.stringify([
               {
                 type: "ClientRequest",
+                messageId: createMessageId(),
                 method: "POST",
-                path: "/restapi/v1.0/subscription",
-                body: {
-                  eventFilters: ["/team-messaging/v1/posts"],
-                  deliveryMode: { transportType: "WebSocket" },
-                },
+                path: "/restapi/v1.0/subscription/",
+              },
+              {
+                eventFilters: ["/team-messaging/v1/posts"],
+                deliveryMode: { transportType: "WebSocket" },
               },
             ]),
           );
+          onDiagnostic?.("ws_subscription_request_sent");
           return;
         }
 
         if (isSubscriptionConfirmation(parsed) && !connected) {
           connected = true;
+          onDiagnostic?.("ws_subscription_confirmed", { status: readFrameStatus(parsed) ?? 0 });
           onConnected?.();
           pingTimer = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
@@ -121,8 +127,17 @@ export class RingCentralWebSocketMonitor {
           return;
         }
 
+        const rejectedStatus = readRejectedClientRequestStatus(parsed);
+        if (rejectedStatus !== undefined) {
+          onDiagnostic?.("ws_subscription_rejected", { status: rejectedStatus });
+          cleanup();
+          reject(new Error(`WebSocket subscription failed: status=${rejectedStatus}`));
+          return;
+        }
+
         if (isHeartbeatResponse(parsed)) {
           clearTimeout(pongTimer);
+          onDiagnostic?.("ws_heartbeat_response");
           return;
         }
 
@@ -135,6 +150,7 @@ export class RingCentralWebSocketMonitor {
       ws.addEventListener("close", (event) => {
         cleanup();
         abortSignal.removeEventListener("abort", onAbort);
+        onDiagnostic?.("ws_close", { code: event.code });
         if (abortSignal.aborted) {
           resolve();
         } else {
@@ -145,6 +161,7 @@ export class RingCentralWebSocketMonitor {
       ws.addEventListener("error", () => {
         cleanup();
         abortSignal.removeEventListener("abort", onAbort);
+        onDiagnostic?.("ws_error");
         reject(new Error("WebSocket error"));
       });
 
@@ -240,21 +257,53 @@ function pruneSentPosts(sentPosts: Map<string, number>): void {
   }
 }
 
-function isConnectionDetails(value: unknown): value is WSConnectionDetails {
-  return !!value && typeof value === "object" && "wsc" in value;
+export function isConnectionDetails(value: unknown): boolean {
+  const header = readFrameHeader(value);
+  return !!header && "wsc" in header;
 }
 
-function isSubscriptionConfirmation(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  return record.status === 200 || (typeof record.id === "string" && typeof record.uuid === "string");
+export function isSubscriptionConfirmation(value: unknown): boolean {
+  const header = readFrameHeader(value);
+  const body = readFrameBody(value);
+  return (
+    (header?.type === "ClientRequest" && header.status === 200) ||
+    (!Array.isArray(value) && header?.status === 200) ||
+    body?.status === 200 ||
+    (typeof body?.id === "string" && typeof body.uuid === "string")
+  );
 }
 
 function isHeartbeatResponse(value: unknown): boolean {
+  const header = readFrameHeader(value);
+  return header?.type === "HeartbeatResponse";
+}
+
+function readFrameHeader(value: unknown): Record<string, unknown> | null {
   const header = Array.isArray(value) ? value[0] : value;
-  return !!header && typeof header === "object" && (header as Record<string, unknown>).type === "HeartbeatResponse";
+  return header && typeof header === "object" ? (header as Record<string, unknown>) : null;
+}
+
+function readFrameBody(value: unknown): Record<string, unknown> | null {
+  const body = Array.isArray(value) ? value[1] : value;
+  return body && typeof body === "object" ? (body as Record<string, unknown>) : null;
+}
+
+function readFrameStatus(value: unknown): number | undefined {
+  const status = readFrameHeader(value)?.status ?? readFrameBody(value)?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function readRejectedClientRequestStatus(value: unknown): number | undefined {
+  const header = readFrameHeader(value);
+  const status = typeof header?.status === "number" ? header.status : undefined;
+  if (header?.type !== "ClientRequest" || status === undefined || status < 400) {
+    return undefined;
+  }
+  return status;
+}
+
+function createMessageId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `rc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
