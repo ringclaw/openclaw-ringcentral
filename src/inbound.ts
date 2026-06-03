@@ -1,16 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-logging";
-import {
-  resolveChannelMessageIngress,
-  type ChannelIngressIdentityDescriptor,
-  type ChannelIngressRouteDescriptor,
+import type {
+  ChannelIngressIdentityDescriptor,
+  ChannelIngressRouteDescriptor,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  dispatchReplyWithBufferedBlockDispatcher,
-  finalizeInboundContext,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RingCentralClient } from "./client.js";
 import { deleteMessage, sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
@@ -19,14 +12,19 @@ import { channelSetMatches, type ThreadParticipationTracker } from "./threading.
 import type { Chat, PersonInfo, Post, ResolvedAccount } from "./types.js";
 
 type ChatType = "direct" | "group" | "channel";
+type ResolveAgentRoute = typeof import("openclaw/plugin-sdk/routing")["resolveAgentRoute"];
+type FinalizeInboundContext =
+  typeof import("openclaw/plugin-sdk/reply-runtime")["finalizeInboundContext"];
+type DispatchReplyWithBufferedBlockDispatcher =
+  typeof import("openclaw/plugin-sdk/reply-runtime")["dispatchReplyWithBufferedBlockDispatcher"];
 
 type ChannelRuntimeLike = {
   routing?: {
-    resolveAgentRoute?: typeof resolveAgentRoute;
+    resolveAgentRoute?: ResolveAgentRoute;
   };
   reply?: {
-    finalizeInboundContext?: typeof finalizeInboundContext;
-    dispatchReplyWithBufferedBlockDispatcher?: typeof dispatchReplyWithBufferedBlockDispatcher;
+    finalizeInboundContext?: FinalizeInboundContext;
+    dispatchReplyWithBufferedBlockDispatcher?: DispatchReplyWithBufferedBlockDispatcher;
   };
 };
 
@@ -107,7 +105,8 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   });
   const groupAllowFrom = groupConfig?.users ?? [];
 
-  const ingress = await resolveChannelMessageIngress({
+  const ingressRuntime = await import("openclaw/plugin-sdk/channel-ingress-runtime");
+  const ingress = await ingressRuntime.resolveChannelMessageIngress({
     channelId: RINGCENTRAL_CHANNEL_ID,
     accountId: "default",
     identity,
@@ -136,7 +135,8 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   });
 
   if (ingress.ingress.admission !== "dispatch") {
-    logInboundDrop({
+    const loggingRuntime = await import("openclaw/plugin-sdk/channel-logging");
+    loggingRuntime.logInboundDrop({
       log,
       channel: RINGCENTRAL_CHANNEL_ID,
       reason: ingress.ingress.reasonCode,
@@ -160,14 +160,23 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       accountId: "default",
       peer,
     }) ??
-    resolveAgentRoute({
+    (await import("openclaw/plugin-sdk/routing")).resolveAgentRoute({
       cfg,
       channel: RINGCENTRAL_CHANNEL_ID,
       accountId: "default",
       peer,
     });
   const target = buildInboundTarget({ chatType, chatId, senderId });
-  const context = (runtime.reply?.finalizeInboundContext ?? finalizeInboundContext)({
+  const fallbackReplyRuntime =
+    runtime.reply?.finalizeInboundContext && runtime.reply?.dispatchReplyWithBufferedBlockDispatcher
+      ? null
+      : await import("openclaw/plugin-sdk/reply-runtime");
+  const finalizeInboundContext =
+    runtime.reply?.finalizeInboundContext ?? fallbackReplyRuntime!.finalizeInboundContext;
+  const dispatchReplyWithBufferedBlockDispatcher =
+    runtime.reply?.dispatchReplyWithBufferedBlockDispatcher ??
+    fallbackReplyRuntime!.dispatchReplyWithBufferedBlockDispatcher;
+  const context = finalizeInboundContext({
     Body: bodyForAgent,
     BodyForAgent: bodyForAgent,
     RawBody: text,
@@ -196,8 +205,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     OwnerAllowFrom: allowFrom,
   });
 
-  await (runtime.reply?.dispatchReplyWithBufferedBlockDispatcher ??
-    dispatchReplyWithBufferedBlockDispatcher)({
+  await dispatchReplyWithBufferedBlockDispatcher({
     ctx: context,
     cfg,
     dispatcherOptions: createDispatcherOptions({
