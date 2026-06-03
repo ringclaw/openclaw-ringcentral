@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildWebSocketUrl, extractPostFromWsFrame, markSentPost, shouldProcessPost } from "./monitor.js";
+import {
+  buildWebSocketUrl,
+  extractPostFromWsFrame,
+  isConnectionDetails,
+  isSubscriptionConfirmation,
+  markSentPost,
+  shouldProcessPost,
+} from "./monitor.js";
 import { ANSWER_START } from "./shared.js";
 
 function makeWSEvent(overrides?: Record<string, unknown>) {
@@ -75,6 +82,48 @@ describe("markSentPost", () => {
     markSentPost(sentPosts, "p1");
     expect(sentPosts.has("p1")).toBe(true);
     expect(sentPosts.get("p1")).toBeGreaterThan(0);
+  });
+});
+
+describe("isConnectionDetails", () => {
+  it("accepts RingCentral array connection detail frames", () => {
+    expect(
+      isConnectionDetails([
+        {
+          type: "ConnectionDetails",
+          status: 200,
+          wsc: { token: "recovery-token", sequence: 1 },
+        },
+        { idleTimeout: 1800 },
+      ]),
+    ).toBe(true);
+  });
+
+  it("accepts object connection detail frames", () => {
+    expect(isConnectionDetails({ wsc: { token: "recovery-token", sequence: 1 } })).toBe(true);
+  });
+});
+
+describe("isSubscriptionConfirmation", () => {
+  it("accepts object subscription responses", () => {
+    expect(isSubscriptionConfirmation({ status: 200 })).toBe(true);
+    expect(isSubscriptionConfirmation({ id: "sub-1", uuid: "uuid-1" })).toBe(true);
+  });
+
+  it("accepts array subscription response frames", () => {
+    expect(
+      isSubscriptionConfirmation([
+        { type: "ClientRequest", status: 200 },
+        { id: "sub-1", uuid: "uuid-1" },
+      ]),
+    ).toBe(true);
+  });
+
+  it("rejects malformed subscription responses", () => {
+    expect(isSubscriptionConfirmation(null)).toBe(false);
+    expect(isSubscriptionConfirmation([{ type: "ClientRequest", status: 400 }, { message: "bad request" }])).toBe(
+      false,
+    );
   });
 });
 
