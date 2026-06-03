@@ -13,6 +13,15 @@ const credentialsSchema = z.object({
   jwt: z.string().optional(),
 });
 
+const stringListSchema = z.array(z.string()).optional();
+
+const processingPlaceholderSchema = z.object({
+  enabled: z.boolean().optional(),
+  initialText: z.string().optional(),
+  delayedText: z.string().optional(),
+  editDelaySeconds: z.number().int().min(0).max(60).optional(),
+});
+
 const dmSchema = z.object({
   policy: z.enum(["disabled", "allowlist", "pairing", "open"]).optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -30,10 +39,23 @@ export const ringCentralConfigSchema = z.object({
   enabled: z.boolean().optional(),
   name: z.string().optional(),
   botToken: z.string().optional(),
+  ownerCredentials: credentialsSchema.optional(),
   credentials: credentialsSchema.optional(),
   server: z.string().optional(),
   botExtensionId: z.string().optional(),
   selfOnly: z.boolean().optional(),
+  allowedUserEmails: stringListSchema,
+  allowAllUsers: z.boolean().optional(),
+  allowedChannels: stringListSchema,
+  ignoredChannels: stringListSchema,
+  freeResponseChannels: stringListSchema,
+  threadRequireMention: z.boolean().optional(),
+  noThreadChannels: stringListSchema,
+  replyToMode: z.enum(["off", "first", "all"]).optional(),
+  processingPlaceholder: processingPlaceholderSchema.optional(),
+  historyMessageLimit: z.number().int().min(1).max(1000).optional(),
+  homeChannel: z.string().optional(),
+  homeChannelName: z.string().optional(),
   groupPolicy: z.enum(["disabled", "allowlist", "open"]).optional(),
   groups: z.record(z.string(), groupConfigSchema).optional(),
   requireMention: z.boolean().optional(),

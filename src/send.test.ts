@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { sendMessage, sendTypingIndicator, updateMessage, deleteMessage } from "./send.js";
-import type { RingCentralClient } from "./client.js";
+import { RingCentralApiError, type RingCentralClient } from "./client.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -22,14 +22,54 @@ describe("sendMessage", () => {
   it("sends text message with markdown conversion", async () => {
     const client = createMockClient();
     const result = await sendMessage({ client, chatId: "c1", text: "# Hello" });
-    expect(result).toEqual({ postId: "post1" });
-    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "**Hello**");
+    expect(result).toMatchObject({ postId: "post1" });
+    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "**Hello**", {});
   });
 
   it("sends text without markdown conversion", async () => {
     const client = createMockClient();
     await sendMessage({ client, chatId: "c1", text: "# Raw", convertMarkdown: false });
-    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "# Raw");
+    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "# Raw", {});
+  });
+
+  it("sends threaded replies when replyToId is present", async () => {
+    const client = createMockClient();
+    await sendMessage({ client, chatId: "c1", text: "reply", replyToId: "p-parent" });
+    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "reply", {
+      parentPostId: "p-parent",
+    });
+  });
+
+  it("uses fallback client on authz failures", async () => {
+    const client = createMockClient();
+    const fallbackClient = createMockClient();
+    (client as any).sendPost.mockRejectedValueOnce(new RingCentralApiError(403, "forbidden"));
+    const result = await sendMessage({ client, fallbackClient, chatId: "c1", text: "fallback" });
+    expect(result).toMatchObject({ postId: "post1" });
+    expect((fallbackClient as any).sendPost).toHaveBeenCalledWith("c1", "fallback", {});
+  });
+
+  it("falls back to unthreaded owner send when owner threaded send fails", async () => {
+    const client = createMockClient();
+    const fallbackClient = createMockClient();
+    (client as any).sendPost.mockRejectedValueOnce(new RingCentralApiError(403, "forbidden"));
+    (fallbackClient as any).sendPost
+      .mockRejectedValueOnce(new RingCentralApiError(404, "thread missing"))
+      .mockResolvedValueOnce({ id: "owner-unthreaded", text: "", groupId: "", type: "", creatorId: "", creationTime: "" });
+
+    const result = await sendMessage({
+      client,
+      fallbackClient,
+      chatId: "c1",
+      text: "fallback",
+      replyToId: "p-parent",
+    });
+
+    expect(result).toMatchObject({ postId: "owner-unthreaded" });
+    expect((fallbackClient as any).sendPost).toHaveBeenNthCalledWith(1, "c1", "fallback", {
+      parentPostId: "p-parent",
+    });
+    expect((fallbackClient as any).sendPost).toHaveBeenNthCalledWith(2, "c1", "fallback");
   });
 
   it("uploads media from URL", async () => {
@@ -40,7 +80,7 @@ describe("sendMessage", () => {
       headers: new Map([["content-type", "image/png"]]),
     });
     const result = await sendMessage({ client, chatId: "c1", mediaUrl: "https://example.com/img.png" });
-    expect(result).toEqual({ postId: "file1" });
+    expect(result).toMatchObject({ postId: "file1" });
     expect((client as any).uploadFile).toHaveBeenCalled();
   });
 
@@ -48,8 +88,8 @@ describe("sendMessage", () => {
     const client = createMockClient();
     mockFetch.mockRejectedValueOnce(new Error("network error"));
     const result = await sendMessage({ client, chatId: "c1", text: "fallback", mediaUrl: "https://bad.url/img.png" });
-    expect(result).toEqual({ postId: "post1" });
-    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "fallback");
+    expect(result).toMatchObject({ postId: "post1" });
+    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "fallback", {});
   });
 
   it("returns null when no text and no media", async () => {
@@ -64,6 +104,7 @@ describe("sendTypingIndicator", () => {
     const client = createMockClient();
     const id = await sendTypingIndicator(client, "c1");
     expect(id).toBe("post1");
+    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "👀", {});
   });
 
   it("returns undefined on failure", async () => {
@@ -76,7 +117,7 @@ describe("sendTypingIndicator", () => {
   it("uses custom text", async () => {
     const client = createMockClient();
     await sendTypingIndicator(client, "c1", "Thinking...");
-    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "Thinking...");
+    expect((client as any).sendPost).toHaveBeenCalledWith("c1", "Thinking...", {});
   });
 });
 

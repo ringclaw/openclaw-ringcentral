@@ -17,10 +17,28 @@ describe("ringCentralConfigSchema", () => {
       enabled: true,
       name: "My Bot",
       botToken: "bot-static-token",
+      ownerCredentials: { clientId: "owner-cid", clientSecret: "owner-cs", jwt: "owner-jwt" },
       credentials: { clientId: "cid", clientSecret: "cs", jwt: "jwt-tok" },
       server: "https://platform.ringcentral.com",
       botExtensionId: "12345",
       selfOnly: false,
+      allowedUserEmails: ["owner@example.com"],
+      allowAllUsers: false,
+      allowedChannels: ["g1"],
+      ignoredChannels: ["g2"],
+      freeResponseChannels: ["g3"],
+      threadRequireMention: true,
+      noThreadChannels: ["g4"],
+      replyToMode: "first",
+      processingPlaceholder: {
+        enabled: true,
+        initialText: "start",
+        delayedText: "delay",
+        editDelaySeconds: 3,
+      },
+      historyMessageLimit: 250,
+      homeChannel: "g-home",
+      homeChannelName: "Home",
       groupPolicy: "allowlist",
       groups: {
         "123": { enabled: true, requireMention: true, systemPrompt: "Be helpful", users: ["u1", 42] },
@@ -43,6 +61,11 @@ describe("ringCentralConfigSchema", () => {
   it("rejects invalid dm.policy enum", () => {
     const result = ringCentralConfigSchema.safeParse({ dm: { policy: "invalid" } });
     expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid replyToMode and out-of-range history limit", () => {
+    expect(ringCentralConfigSchema.safeParse({ replyToMode: "bad" }).success).toBe(false);
+    expect(ringCentralConfigSchema.safeParse({ historyMessageLimit: 1001 }).success).toBe(false);
   });
 
   it("rejects non-integer textChunkLimit", () => {

@@ -1,8 +1,16 @@
 // OpenClaw action protocol adapter — maps agent tool calls to actions.ts.
 
 import { randomBytes } from "node:crypto";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { RingCentralClient } from "./client.js";
+import { createBotClient, createOwnerClient } from "./client.js";
+import { getRcConfig, hasOwnerCredentials, isAccountConfigured, resolveAccount } from "./accounts.js";
 import * as actions from "./actions.js";
+import { extractChatId } from "./targets.js";
 
 const CHAT_SCOPED_ACTIONS = new Set<ActionName>([
   "send-message",
@@ -36,6 +44,10 @@ interface PendingAction {
 }
 
 const pendingActions = new Map<string, PendingAction>();
+
+export const __testing = {
+  pendingActions,
+};
 
 function cleanExpiredPendingActions(): void {
   const now = Date.now();
@@ -104,8 +116,88 @@ export function getEnabledActions(config: ActionConfig = {}): ActionName[] {
   return all;
 }
 
-// Exported for testing
-export const __testing = { pendingActions, PROTECTED_ACTIONS };
+function getEnabledMessageActions(config: ActionConfig = {}): ChannelMessageActionName[] {
+  const enabled: ChannelMessageActionName[] = [];
+  if (config.messages !== false) {
+    enabled.push("send", "read", "edit", "delete");
+  }
+  if (config.channelInfo !== false) {
+    enabled.push("channel-info");
+  }
+  return enabled;
+}
+
+function agentToolResult(details: unknown): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+    details,
+  };
+}
+
+function readTargetChatId(params: Record<string, unknown>): string {
+  const target = String(params.to ?? params.chatId ?? params.chat_id ?? "");
+  return extractChatId(target) ?? target;
+}
+
+function createActionClient(cfg: unknown): RingCentralClient {
+  const rcCfg = getRcConfig(cfg);
+  const account = resolveAccount(rcCfg);
+  if (hasOwnerCredentials(account)) {
+    return createOwnerClient(
+      account.server,
+      account.ownerCredentials!.clientId,
+      account.ownerCredentials!.clientSecret,
+      account.ownerCredentials!.jwt,
+    );
+  }
+  return createBotClient(account.server, account.botToken);
+}
+
+export const ringCentralMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: ({ cfg }) => {
+    const rcCfg = getRcConfig(cfg);
+    if (!isAccountConfigured(rcCfg)) {
+      return { actions: [], capabilities: [], schema: null };
+    }
+    return {
+      actions: getEnabledMessageActions(rcCfg.actions),
+      capabilities: ["delivery-pin"],
+      schema: null,
+    };
+  },
+  supportsAction: ({ action }) =>
+    ["send", "read", "edit", "delete", "channel-info"].includes(action),
+  extractToolSend: ({ args }) => {
+    const action = String(args.action ?? "");
+    if (action !== "send" && action !== "sendMessage") {
+      return null;
+    }
+    const to = String(args.to ?? "");
+    return to ? { to } : null;
+  },
+  prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
+  handleAction: async (ctx) => {
+    const client = createActionClient(ctx.cfg);
+    const params = ctx.params as Record<string, unknown>;
+    const chatId = readTargetChatId(params);
+    const postId = String(params.postId ?? params.post_id ?? params.messageId ?? "");
+    const text = String(params.text ?? params.message ?? "");
+    switch (ctx.action) {
+      case "send":
+        return agentToolResult(await actions.actionSendMessage(client, chatId, text));
+      case "read":
+        return agentToolResult(await actions.actionReadMessages(client, chatId, Number(params.count) || 20));
+      case "edit":
+        return agentToolResult(await actions.actionEditMessage(client, chatId, postId, text));
+      case "delete":
+        return agentToolResult(await actions.actionDeleteMessage(client, chatId, postId));
+      case "channel-info":
+        return agentToolResult(await actions.actionGetChannelInfo(client, chatId));
+      default:
+        throw new Error(`Unsupported RingCentral action: ${ctx.action}`);
+    }
+  },
+};
 
 export async function handleAction(
   client: RingCentralClient,

@@ -3,6 +3,14 @@
   "name": "RingCentral",
   "description": "OpenClaw RingCentral Team Messaging channel plugin",
   "channels": ["ringcentral"],
+  "contracts": {
+    "tools": ["ringcentral_get_recent_messages"]
+  },
+  "toolMetadata": {
+    "ringcentral_get_recent_messages": {
+      "optional": true
+    }
+  },
   "uiHints": {
     "enabled": { "label": "Enable RingCentral" },
     "name": { "label": "Account Name", "placeholder": "My RingCentral Bot" },
@@ -11,23 +19,31 @@
       "placeholder": "Bot static token from RingCentral Developer Portal",
       "sensitive": true
     },
-    "credentials": { "label": "Private App Credentials (optional)", "advanced": true },
-    "credentials.clientId": { "label": "Client ID", "sensitive": true },
-    "credentials.clientSecret": { "label": "Client Secret", "sensitive": true },
-    "credentials.jwt": { "label": "JWT Token", "sensitive": true },
+    "ownerCredentials": { "label": "Owner Credentials (optional)", "advanced": true },
+    "ownerCredentials.clientId": { "label": "Owner Client ID", "sensitive": true },
+    "ownerCredentials.clientSecret": { "label": "Owner Client Secret", "sensitive": true },
+    "ownerCredentials.jwt": { "label": "Owner JWT Token", "sensitive": true },
     "server": {
       "label": "API Server",
       "placeholder": "https://platform.ringcentral.com",
       "advanced": true
     },
+    "allowedUserEmails": { "label": "Allowed User Emails", "advanced": true },
+    "allowAllUsers": { "label": "Allow All Users", "advanced": true },
+    "allowedChannels": { "label": "Allowed Channels", "advanced": true },
+    "ignoredChannels": { "label": "Ignored Channels", "advanced": true },
+    "freeResponseChannels": { "label": "Free-response Channels", "advanced": true },
+    "threadRequireMention": { "label": "Require Mention in Threads", "advanced": true },
+    "noThreadChannels": { "label": "No-thread Channels", "advanced": true },
+    "replyToMode": { "label": "Reply-to Mode", "advanced": true },
+    "processingPlaceholder": { "label": "Processing Placeholder", "advanced": true },
+    "historyMessageLimit": { "label": "History Message Limit", "advanced": true },
+    "homeChannel": { "label": "Home Channel", "advanced": true },
+    "homeChannelName": { "label": "Home Channel Name", "advanced": true },
     "botExtensionId": {
       "label": "Bot Extension ID",
-      "help": "Extension ID of the bot for @mention detection.",
+      "help": "Extension/person ID of the bot for @mention detection.",
       "placeholder": "123456789"
-    },
-    "selfOnly": {
-      "label": "Self Only Mode",
-      "help": "When enabled, only respond in DMs with the bot."
     },
     "groupPolicy": {
       "label": "Group Policy",
@@ -44,7 +60,7 @@
       "label": "System Prompt",
       "placeholder": "Custom instructions for this group."
     },
-    "groups.*.users": { "label": "Allowed Users", "placeholder": "User ID" },
+    "groups.*.users": { "label": "Allowed Users", "placeholder": "User ID or email" },
     "requireMention": {
       "label": "Require @Mention (Global)",
       "help": "Default for all groups."
@@ -57,6 +73,7 @@
       "placeholder": "4000",
       "advanced": true
     },
+    "allowBots": { "label": "Allow Bot Senders", "advanced": true },
     "actions": { "label": "Actions" },
     "actions.messages": { "label": "Messages" },
     "actions.channelInfo": { "label": "Channel Info" },
@@ -71,9 +88,19 @@
       "enabled": { "type": "boolean" },
       "name": { "type": "string" },
       "botToken": { "type": "string", "description": "Bot static token (required)" },
+      "ownerCredentials": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "clientId": { "type": "string" },
+          "clientSecret": { "type": "string" },
+          "jwt": { "type": "string" }
+        }
+      },
       "credentials": {
         "type": "object",
         "additionalProperties": false,
+        "description": "Deprecated config alias for ownerCredentials.",
         "properties": {
           "clientId": { "type": "string" },
           "clientSecret": { "type": "string" },
@@ -83,11 +110,33 @@
       "server": { "type": "string" },
       "botExtensionId": { "type": "string" },
       "selfOnly": { "type": "boolean" },
+      "allowedUserEmails": { "type": "array", "items": { "type": "string" } },
+      "allowAllUsers": { "type": "boolean" },
+      "allowedChannels": { "type": "array", "items": { "type": "string" } },
+      "ignoredChannels": { "type": "array", "items": { "type": "string" } },
+      "freeResponseChannels": { "type": "array", "items": { "type": "string" } },
+      "threadRequireMention": { "type": "boolean" },
+      "noThreadChannels": { "type": "array", "items": { "type": "string" } },
+      "replyToMode": { "type": "string", "enum": ["off", "first", "all"] },
+      "processingPlaceholder": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "initialText": { "type": "string" },
+          "delayedText": { "type": "string" },
+          "editDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 60 }
+        }
+      },
+      "historyMessageLimit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+      "homeChannel": { "type": "string" },
+      "homeChannelName": { "type": "string" },
       "groupPolicy": { "type": "string", "enum": ["disabled", "allowlist", "open"] },
       "groups": {
         "type": "object",
         "additionalProperties": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
             "requireMention": { "type": "boolean" },

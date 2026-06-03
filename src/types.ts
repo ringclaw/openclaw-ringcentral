@@ -6,6 +6,8 @@ export interface Post {
   type: string;
   text: string;
   creatorId: string;
+  parentPostId?: string;
+  threadId?: string;
   addedPersonIds?: string[];
   creationTime: string;
   lastModifiedTime: string;
@@ -40,6 +42,8 @@ export interface Chat {
 
 export interface ChatMember {
   id: string;
+  email?: string;
+  name?: string;
 }
 
 export interface PersonInfo {
@@ -171,18 +175,49 @@ export interface PaginatedRecords<T> {
 }
 
 // Config types
+export interface RingCentralOwnerCredentials {
+  clientId?: string;
+  clientSecret?: string;
+  jwt?: string;
+}
+
+export interface ResolvedRingCentralOwnerCredentials {
+  clientId: string;
+  clientSecret: string;
+  jwt: string;
+}
+
+export type RingCentralReplyToMode = "off" | "first" | "all";
+
+export interface ProcessingPlaceholderConfig {
+  enabled?: boolean;
+  initialText?: string;
+  delayedText?: string;
+  editDelaySeconds?: number;
+}
+
 export interface RingCentralConfig {
   enabled?: boolean;
   name?: string;
   botToken?: string;
-  credentials?: {
-    clientId?: string;
-    clientSecret?: string;
-    jwt?: string;
-  };
+  ownerCredentials?: RingCentralOwnerCredentials;
+  /** @deprecated Use ownerCredentials. */
+  credentials?: RingCentralOwnerCredentials;
   server?: string;
   botExtensionId?: string;
   selfOnly?: boolean;
+  allowedUserEmails?: string[];
+  allowAllUsers?: boolean;
+  allowedChannels?: string[];
+  ignoredChannels?: string[];
+  freeResponseChannels?: string[];
+  threadRequireMention?: boolean;
+  noThreadChannels?: string[];
+  replyToMode?: RingCentralReplyToMode;
+  processingPlaceholder?: ProcessingPlaceholderConfig;
+  historyMessageLimit?: number;
+  homeChannel?: string;
+  homeChannelName?: string;
   groupPolicy?: "disabled" | "allowlist" | "open";
   groups?: Record<string, GroupConfig>;
   requireMention?: boolean;
@@ -211,11 +246,25 @@ export interface GroupConfig {
 
 export interface ResolvedAccount {
   botToken: string;
-  credentials?: {
-    clientId: string;
-    clientSecret: string;
-    jwt: string;
-  };
+  ownerCredentials?: ResolvedRingCentralOwnerCredentials;
+  /** @deprecated Use ownerCredentials. */
+  credentials?: ResolvedRingCentralOwnerCredentials;
   server: string;
+  allowedUserEmails: string[];
+  allowAllUsers: boolean;
+  allowedChannels: string[];
+  ignoredChannels: string[];
+  freeResponseChannels: string[];
+  noThreadChannels: string[];
+  replyToMode: RingCentralReplyToMode;
+  requireMention: boolean;
+  threadRequireMention: boolean;
+  groupPolicy: "disabled" | "allowlist" | "open";
+  dmPolicy: "disabled" | "allowlist" | "pairing" | "open";
+  textChunkLimit?: number;
+  processingPlaceholder: Required<ProcessingPlaceholderConfig>;
+  historyMessageLimit: number;
+  homeChannel?: string;
+  homeChannelName?: string;
   config: RingCentralConfig;
 }

@@ -37,14 +37,15 @@
     }
   },
   "dependencies": {
-    "zod": "^4.3.6"
+    "typebox": "^1.1.38",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "openclaw": "2026.2.23",
+    "openclaw": "2026.5.28",
     "typescript": "^5.7.3",
     "vitest": "^3.0.4"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.2.23"
+    "openclaw": ">=2026.5.28"
   }
 }

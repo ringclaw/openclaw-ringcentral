@@ -1,34 +1,41 @@
-// RingCentral channel plugin — assembles all adapters.
+// RingCentral channel plugin assembly.
 
+import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import type {
-  ChannelPlugin,
+  ChannelCapabilities,
   ChannelGatewayContext,
   ChannelMeta,
-  ChannelCapabilities,
   ChannelOutboundContext,
-  ChannelMessageActionContext,
-  ReplyPayload,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/channel-contract";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { getRcConfig, hasOwnerCredentials, isAccountConfigured, resolveAccount } from "./accounts.js";
+import { ringCentralMessageActions } from "./actions-adapter.js";
+import { createBotClient, createOwnerClient, type RingCentralClient } from "./client.js";
+import { ringCentralConfigSchema } from "./config-schema.js";
+import { createRingCentralHistoryTool } from "./history-tool.js";
+import { handleInboundPost } from "./inbound.js";
+import { chunkText } from "./markdown.js";
+import { RingCentralWebSocketMonitor } from "./monitor.js";
+import { sendMessage } from "./send.js";
+import { DEFAULT_TEXT_CHUNK_LIMIT, RINGCENTRAL_CHANNEL_ID } from "./shared.js";
+import { extractChatId, normalizeTarget, parseTarget } from "./targets.js";
+import { resolveReplyTransport, ThreadParticipationTracker } from "./threading.js";
+import type { ResolvedAccount } from "./types.js";
 
-import { resolveAccount, isAccountConfigured, hasPrivateApp } from "./accounts.js";
-import { createBotClient, createPrivateClient, type RingCentralClient } from "./client.js";
-import { chunkText, markdownToMiniMarkdown } from "./markdown.js";
-import { startMonitor } from "./monitor.js";
-import { deleteMessage, sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
-import {
-  RINGCENTRAL_CHANNEL_ID,
-  DEFAULT_TEXT_CHUNK_LIMIT,
-} from "./shared.js";
-import { buildDmTarget, buildGroupTarget, extractChatId, normalizeTarget, RC_PREFIX } from "./targets.js";
-import type { RingCentralConfig, ResolvedAccount } from "./types.js";
-import { getEnabledActions, handleAction, type ActionName } from "./actions-adapter.js";
-import { getRingCentralRuntime } from "./runtime.js";
-import { setOwnerId, getOwnerId } from "./identity.js";
+type RuntimeState = {
+  tracker: ThreadParticipationTracker;
+  monitors: RingCentralWebSocketMonitor[];
+};
 
-function getRcConfig(cfg: OpenClawConfig): RingCentralConfig {
-  const channels = (cfg as Record<string, unknown>).channels as Record<string, unknown> | undefined;
-  return (channels?.ringcentral ?? {}) as RingCentralConfig;
+const states = new Map<string, RuntimeState>();
+
+function stateFor(accountId: string): RuntimeState {
+  let state = states.get(accountId);
+  if (!state) {
+    state = { tracker: new ThreadParticipationTracker(), monitors: [] };
+    states.set(accountId, state);
+  }
+  return state;
 }
 
 const meta: ChannelMeta = {
@@ -44,7 +51,7 @@ const capabilities: ChannelCapabilities = {
   chatTypes: ["direct", "group", "channel"],
   media: true,
   edit: true,
-  threads: false,
+  threads: true,
   reactions: false,
 };
 
@@ -52,305 +59,308 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
   id: RINGCENTRAL_CHANNEL_ID,
   meta,
   capabilities,
+  configSchema: buildChannelConfigSchema(ringCentralConfigSchema),
 
   config: {
     listAccountIds: () => ["default"],
     resolveAccount: (cfg: OpenClawConfig) => resolveAccount(getRcConfig(cfg)),
     defaultAccountId: () => "default",
     isEnabled: (account: ResolvedAccount) => account.config.enabled !== false,
-    isConfigured: (account: ResolvedAccount) => !!account.botToken,
+    isConfigured: (_account: ResolvedAccount, cfg: OpenClawConfig) => isAccountConfigured(getRcConfig(cfg)),
     unconfiguredReason: () =>
-      "Bot token not configured. Set botToken in config or RINGCENTRAL_BOT_TOKEN env var.",
+      "Bot token not configured. Set botToken in config or RC_BOT_TOKEN.",
+    hasConfiguredState: ({ cfg, env }) => isAccountConfigured(getRcConfig(cfg), env),
+    describeAccount: (account) => ({
+      accountId: "default",
+      name: account.config.name ?? "RingCentral",
+      enabled: account.config.enabled !== false,
+      configured: !!account.botToken,
+      statusState: account.botToken ? "configured" : "not configured",
+      dmPolicy: account.dmPolicy,
+      allowFrom: account.config.dm?.allowFrom?.map(String),
+      tokenSource: account.config.botToken ? "config" : "env:RC_BOT_TOKEN",
+      credentialSource: hasOwnerCredentials(account) ? "owner credentials" : "none",
+    }),
   },
 
   gateway: {
     startAccount: async (ctx: ChannelGatewayContext<ResolvedAccount>) => {
-      const { account, cfg, abortSignal, setStatus } = ctx;
+      const { account, cfg, abortSignal, setStatus, accountId } = ctx;
+      const state = stateFor(accountId);
       const botClient = createBotClient(account.server, account.botToken);
-      const readClient = hasPrivateApp(account)
-        ? createPrivateClient(
-            account.server,
-            account.credentials!.clientId,
-            account.credentials!.clientSecret,
-            account.credentials!.jwt,
-          )
-        : botClient;
+      const ownerClient = createOwnerClientFromAccount(account);
+      const botPersonId = account.config.botExtensionId ?? (await resolvePersonId(botClient));
+      const ownerPersonId = ownerClient ? await resolvePersonId(ownerClient) : undefined;
+      const ignoredTexts = [
+        account.processingPlaceholder.initialText,
+        account.processingPlaceholder.delayedText,
+      ];
+      const seenInboundPosts = new Set<string>();
+      const markOwnPost = (postId: string) => {
+        state.tracker.remember(postId);
+        for (const monitor of state.monitors) {
+          monitor.markOwnPost(postId);
+        }
+      };
+      const onMessage = (post: Parameters<typeof handleInboundPost>[0]["post"]) => {
+        if (seenInboundPosts.has(post.id)) {
+          return;
+        }
+        seenInboundPosts.add(post.id);
+        void handleInboundPost({
+          post,
+          cfg,
+          botClient,
+          ownerClient,
+          account,
+          botPersonId,
+          ownerPersonId,
+          channelRuntime: ctx.channelRuntime,
+          tracker: state.tracker,
+          markOwnPost,
+          log: (message) => ctx.log?.info(message) ?? console.log(message),
+        });
+      };
 
-      let botExtensionId = account.config.botExtensionId;
-      if (!botExtensionId) {
-        try {
-          const ext = await botClient.getExtensionInfo();
-          botExtensionId = String(ext.id);
-        } catch { /* continue without */ }
-      }
-
-      // Cache the private app owner identity for Self Only mode verification
-      if (hasPrivateApp(account)) {
-        try {
-          const ownerExt = await readClient.getExtensionInfo();
-          setOwnerId(String(ownerExt.id));
-        } catch { /* continue without — selfOnly will reject all if not cached */ }
-      }
-
-      setStatus({ state: "connecting" } as any);
-
-      await startMonitor({
-        serverUrl: account.server,
-        botToken: account.botToken,
-        botExtensionId,
+      setStatus({ accountId, state: "connecting", statusState: "configured" } as never);
+      const botMonitor = new RingCentralWebSocketMonitor({
+        client: botClient,
+        ownCreatorId: botPersonId,
+        filterOwnCreator: true,
+        ignoredTexts,
         abortSignal,
-        log: (...args) => console.log(...args),
         onConnected: () => {
-          setStatus({ state: "connected" } as any);
-          console.log("[ringcentral] connected and listening");
+          setStatus({ accountId, connected: true, statusState: "linked" } as never);
+          ctx.log?.info("[ringcentral] bot websocket connected");
         },
         onDisconnected: (err) => {
-          setStatus({ state: "disconnected", error: err?.message } as any);
+          setStatus({ accountId, connected: false, lastError: err?.message } as never);
         },
-        onMessage: (post) => {
-          void handleInboundPost({ post, cfg, botClient, readClient, account, botExtensionId });
-        },
+        onMessage,
+        log: (...args) => ctx.log?.info(args.map(String).join(" ")) ?? console.log(...args),
       });
+      const monitors = [botMonitor];
+      if (ownerClient) {
+        monitors.push(
+          new RingCentralWebSocketMonitor({
+            client: ownerClient,
+            ownCreatorId: ownerPersonId,
+            filterOwnCreator: false,
+            ignoredTexts,
+            abortSignal,
+            onMessage,
+            onConnected: () => ctx.log?.info("[ringcentral] owner websocket connected"),
+            onDisconnected: (err) => ctx.log?.warn?.(`[ringcentral] owner websocket disconnected: ${err?.message ?? "unknown"}`),
+            log: (...args) => ctx.log?.debug?.(args.map(String).join(" ")) ?? undefined,
+          }),
+        );
+      }
+      state.monitors = monitors;
+      try {
+        await Promise.all(monitors.map((monitor) => monitor.start()));
+      } finally {
+        state.monitors = [];
+      }
     },
   },
 
   outbound: {
-    deliveryMode: "direct" as const,
+    deliveryMode: "direct",
     textChunkLimit: DEFAULT_TEXT_CHUNK_LIMIT,
-
     sendText: async (outCtx: ChannelOutboundContext) => {
-      const { to, text, cfg } = outCtx as any;
-      const chatId = extractChatId(to);
-      if (!chatId) return { ok: false, error: new Error(`Invalid target: ${to}`), channel: RINGCENTRAL_CHANNEL_ID, messageId: "" };
-
-      const rcCfg = getRcConfig(cfg);
-      const account = resolveAccount(rcCfg);
-      const client = createBotClient(account.server, account.botToken);
-      const limit = rcCfg.textChunkLimit ?? DEFAULT_TEXT_CHUNK_LIMIT;
-      const converted = markdownToMiniMarkdown(text ?? "");
-      const chunks = chunkText(converted, limit);
-
+      const chatId = extractChatId(outCtx.to);
+      if (!chatId) {
+        return {
+          ok: false,
+          error: new Error(`Invalid target: ${outCtx.to}`),
+          channel: RINGCENTRAL_CHANNEL_ID,
+          messageId: "",
+        } as never;
+      }
+      const account = resolveAccount(getRcConfig(outCtx.cfg));
+      const botClient = createBotClient(account.server, account.botToken);
+      const ownerClient = createOwnerClientFromAccount(account);
+      const state = stateFor(outCtx.accountId ?? "default");
       let lastPostId = "";
-      for (const chunk of chunks) {
-        const post = await client.sendPost(chatId, chunk);
-        lastPostId = post.id;
+      for (const chunk of chunkText(outCtx.text ?? "", account.textChunkLimit ?? DEFAULT_TEXT_CHUNK_LIMIT)) {
+        const result = await sendMessage({
+          client: botClient,
+          fallbackClient: ownerClient,
+          chatId,
+          text: chunk,
+          replyToId: outCtx.replyToId,
+          threadId: outCtx.threadId,
+          replyToMode: account.replyToMode,
+          noThreadChannels: account.noThreadChannels,
+          tracker: state.tracker,
+          markOwnPost: (postId) => {
+            lastPostId = postId;
+            state.tracker.remember(postId);
+            for (const monitor of state.monitors) {
+              monitor.markOwnPost(postId);
+            }
+          },
+        });
+        lastPostId = result?.postId ?? lastPostId;
       }
-      return { ok: true, channel: RINGCENTRAL_CHANNEL_ID, messageId: lastPostId };
+      return { ok: true, channel: RINGCENTRAL_CHANNEL_ID, messageId: lastPostId } as never;
     },
-
     sendMedia: async (outCtx: ChannelOutboundContext) => {
-      const { to, cfg } = outCtx as any;
-      const chatId = extractChatId(to);
-      if (!chatId) return { ok: false, error: new Error(`Invalid target: ${to}`), channel: RINGCENTRAL_CHANNEL_ID, messageId: "" };
-
-      const rcCfg = getRcConfig(cfg);
-      const account = resolveAccount(rcCfg);
-      const client = createBotClient(account.server, account.botToken);
-
-      const mediaUrl = (outCtx as any).mediaUrl;
-      if (mediaUrl) {
-        const result = await sendMessage({ client, chatId, mediaUrl });
-        return { ok: true, channel: RINGCENTRAL_CHANNEL_ID, messageId: result?.postId ?? "" };
+      const chatId = extractChatId(outCtx.to);
+      if (!chatId) {
+        return {
+          ok: false,
+          error: new Error(`Invalid target: ${outCtx.to}`),
+          channel: RINGCENTRAL_CHANNEL_ID,
+          messageId: "",
+        } as never;
       }
-      return { ok: true, channel: RINGCENTRAL_CHANNEL_ID, messageId: "" };
+      const account = resolveAccount(getRcConfig(outCtx.cfg));
+      const state = stateFor(outCtx.accountId ?? "default");
+      const result = await sendMessage({
+        client: createBotClient(account.server, account.botToken),
+        fallbackClient: createOwnerClientFromAccount(account),
+        chatId,
+        mediaUrl: outCtx.mediaUrl,
+        replyToId: outCtx.replyToId,
+        threadId: outCtx.threadId,
+        replyToMode: account.replyToMode,
+        noThreadChannels: account.noThreadChannels,
+        tracker: state.tracker,
+        markOwnPost: (postId) => {
+          state.tracker.remember(postId);
+          for (const monitor of state.monitors) {
+            monitor.markOwnPost(postId);
+          }
+        },
+      });
+      return { ok: true, channel: RINGCENTRAL_CHANNEL_ID, messageId: result?.postId ?? "" } as never;
+    },
+  },
+
+  threading: {
+    resolveReplyToMode: ({ cfg }) => resolveAccount(getRcConfig(cfg)).replyToMode,
+    resolveReplyTransport: ({ cfg, accountId, threadId, replyToId }) => {
+      const account = resolveAccount(getRcConfig(cfg));
+      const transport = resolveReplyTransport({
+        chatId: "",
+        threadId,
+        replyToId,
+        replyToMode: account.replyToMode,
+        noThreadChannels: account.noThreadChannels,
+        tracker: stateFor(accountId ?? "default").tracker,
+      });
+      if (!transport.parentPostId && !transport.threadId) {
+        return null;
+      }
+      return {
+        replyToId: transport.parentPostId ? String(transport.parentPostId) : undefined,
+        threadId: transport.threadId ? String(transport.threadId) : undefined,
+      };
     },
   },
 
   messaging: {
+    targetPrefixes: ["ringcentral", "rc"],
     normalizeTarget: (raw: string) => normalizeTarget(raw),
+    inferTargetChatType: ({ to }) => {
+      const parsed = parseTarget(to);
+      if (parsed?.kind === "dm" || parsed?.kind === "user") {
+        return "direct";
+      }
+      if (parsed?.kind === "channel") {
+        return "channel";
+      }
+      if (parsed?.kind === "group" || parsed?.kind === "chat") {
+        return "group";
+      }
+      return undefined;
+    },
+    targetResolver: {
+      looksLikeId: (raw) => !!extractChatId(raw),
+      hint: "ringcentral:<dm|group|channel|chat>:<id>",
+    },
+  },
+
+  directory: {
+    self: async ({ cfg }) => {
+      const account = resolveAccount(getRcConfig(cfg));
+      const ext = await createBotClient(account.server, account.botToken).getExtensionInfo();
+      return { kind: "user", id: String(ext.id), name: ext.name, raw: ext };
+    },
+    listGroupsLive: async ({ cfg, limit }) => {
+      const account = resolveAccount(getRcConfig(cfg));
+      const chats = await createPreferredReadClient(account).listChats(undefined, limit ?? 50);
+      return chats.records.map((chat) => ({
+        kind: chat.type === "Everyone" ? "channel" : "group",
+        id: chat.id,
+        name: chat.name ?? chat.id,
+        raw: chat,
+      }));
+    },
+    listGroups: async ({ cfg, limit }) => {
+      const account = resolveAccount(getRcConfig(cfg));
+      return (account.allowedChannels.length ? account.allowedChannels : Object.keys(account.config.groups ?? {}))
+        .slice(0, limit ?? 50)
+        .map((id) => ({ kind: "group", id, name: id }));
+    },
   },
 
   status: {
-    probeAccount: async (ctx: any) => {
+    probeAccount: async ({ account }) => {
       try {
-        const client = createBotClient(ctx.account.server, ctx.account.botToken);
-        const ext = await client.getExtensionInfo();
-        return { ok: true, data: { extensionId: ext.id, name: ext.name } };
+        const ext = await createBotClient(account.server, account.botToken).getExtensionInfo();
+        const owner = hasOwnerCredentials(account)
+          ? await createOwnerClientFromAccount(account)?.getExtensionInfo().catch((err) => ({ error: String(err) }))
+          : undefined;
+        return { ok: true, extensionId: ext.id, name: ext.name, owner };
       } catch (err) {
-        return { ok: false, error: err instanceof Error ? err : new Error(String(err)) };
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },
-    buildAccountSnapshot: (ctx: any) => ({
+    buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: "default",
-      name: ctx.account.config.name ?? "RingCentral",
-      state: "unknown" as const,
-      label: ctx.account.config.name ?? "RingCentral",
-    }) as any,
+      name: account.config.name ?? "RingCentral",
+      enabled: account.config.enabled !== false,
+      configured: !!account.botToken,
+      statusState: runtime?.connected ? "linked" : "configured",
+      connected: runtime?.connected,
+      label: account.config.name ?? "RingCentral",
+      dmPolicy: account.dmPolicy,
+      allowFrom: account.config.dm?.allowFrom?.map(String),
+      credentialSource: hasOwnerCredentials(account) ? "owner credentials" : "none",
+    }) as never,
   },
 
   mentions: {
-    stripPatterns: (_params: any) => ["!\\[:Person\\]\\(\\d+\\)\\s*"],
+    stripPatterns: () => ["!\\[:Person\\]\\(\\d+\\)\\s*"],
   },
 
-  actions: {
-    listActions: ({ cfg }: any) => {
-      const rcCfg = getRcConfig(cfg);
-      return getEnabledActions(rcCfg.actions) as any;
-    },
-    handleAction: async (ctx: ChannelMessageActionContext) => {
-      const rcCfg = getRcConfig(ctx.cfg);
-      const account = resolveAccount(rcCfg);
-      const client = hasPrivateApp(account)
-        ? createPrivateClient(
-            account.server,
-            account.credentials!.clientId,
-            account.credentials!.clientSecret,
-            account.credentials!.jwt,
-          )
-        : createBotClient(account.server, account.botToken);
-
-      const sessionChatId = (ctx as any).toolContext?.currentChannelId as string | undefined;
-      const result = await handleAction(client, ctx.action as ActionName, ctx.params, sessionChatId);
-      return { content: result, details: result } as any;
-    },
-  },
+  actions: ringCentralMessageActions,
+  agentTools: ({ cfg }) => [createRingCentralHistoryTool(cfg)],
 };
 
-// --- Inbound Message Handler ---
-
-interface InboundContext {
-  post: { id: string; groupId: string; text: string; creatorId: string; creationTime: string };
-  cfg: OpenClawConfig;
-  botClient: RingCentralClient;
-  readClient: RingCentralClient;
-  account: ResolvedAccount;
-  botExtensionId?: string;
+function createOwnerClientFromAccount(account: ResolvedAccount): RingCentralClient | undefined {
+  if (!hasOwnerCredentials(account)) {
+    return undefined;
+  }
+  return createOwnerClient(
+    account.server,
+    account.ownerCredentials!.clientId,
+    account.ownerCredentials!.clientSecret,
+    account.ownerCredentials!.jwt,
+  );
 }
 
-async function handleInboundPost(inCtx: InboundContext): Promise<void> {
-  const { post, cfg, botClient, account } = inCtx;
-  const chatId = post.groupId;
-  const text = post.text ?? "";
-  const senderId = post.creatorId;
+function createPreferredReadClient(account: ResolvedAccount): RingCentralClient {
+  return createOwnerClientFromAccount(account) ?? createBotClient(account.server, account.botToken);
+}
 
-  // Self Only mode: only process messages from the cached private app owner
-  if (account.config.selfOnly) {
-    const ownerId = getOwnerId();
-    if (!ownerId || senderId !== ownerId) {
-      return;
-    }
-  }
-
-  // Determine chat type
-  let chatType: "direct" | "group" | "channel" = "direct";
+async function resolvePersonId(client: RingCentralClient): Promise<string | undefined> {
   try {
-    const chat = await botClient.getChat(chatId);
-    if (chat.type === "Group" || chat.type === "Team") chatType = "group";
-    else if (chat.type === "Everyone") chatType = "channel";
-  } catch { /* default to direct */ }
-
-  const from =
-    chatType === "direct" ? buildDmTarget(senderId) : buildGroupTarget(chatId);
-  const to =
-    chatType === "direct"
-      ? `${RC_PREFIX}:${senderId}`
-      : `${RC_PREFIX}:${chatType}:${chatId}`;
-
-  // Access SDK runtime functions via the channel runtime
-  const runtime = getRingCentralRuntime();
-  const channelRuntime = (runtime as any).channel;
-  const { resolveAgentRoute } = await import("openclaw/plugin-sdk/routing" as any).catch(
-    () => ({
-      resolveAgentRoute: channelRuntime?.routing?.resolveAgentRoute ?? ((params: any) => ({
-        agentId: "main",
-        sessionKey: `agent:main:${RINGCENTRAL_CHANNEL_ID}:${params.chatType}:${chatType === "direct" ? senderId : chatId}`,
-        accountId: "default",
-      })),
-    }),
-  );
-
-  const route = resolveAgentRoute({
-    cfg,
-    channel: RINGCENTRAL_CHANNEL_ID,
-    chatType,
-    accountId: "default",
-    to,
-  });
-
-  const sessionKey =
-    route.sessionKey ??
-    `agent:${route.agentId}:${RINGCENTRAL_CHANNEL_ID}:${chatType}:${chatType === "direct" ? senderId : chatId}`;
-
-  // Build MsgContext
-  const finalizeInboundContext =
-    channelRuntime?.reply?.finalizeInboundContext ?? ((x: any) => x);
-
-  const ctxPayload = finalizeInboundContext({
-    Body: text,
-    BodyForAgent: text,
-    RawBody: text,
-    CommandBody: text,
-    From: from,
-    To: to,
-    SessionKey: sessionKey,
-    AccountId: "default",
-    MessageSid: post.id,
-    ChatType: chatType,
-    GroupChannel: chatType !== "direct" ? chatId : undefined,
-    SenderId: senderId,
-    Timestamp: new Date(post.creationTime).getTime(),
-    Provider: RINGCENTRAL_CHANNEL_ID,
-    Surface: RINGCENTRAL_CHANNEL_ID,
-    NativeChannelId: chatId,
-    OriginatingChannel: RINGCENTRAL_CHANNEL_ID,
-    OriginatingTo: to,
-  });
-
-  // Build dispatcher with typing indicator
-  let typingPostId: string | undefined;
-
-  const dispatchReplyWithBufferedBlockDispatcher =
-    channelRuntime?.reply?.dispatchReplyWithBufferedBlockDispatcher;
-
-  if (dispatchReplyWithBufferedBlockDispatcher) {
-    await dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg,
-      dispatcherOptions: {
-        sendTyping: async () => {
-          typingPostId = await sendTypingIndicator(botClient, chatId);
-        },
-        clearTyping: async () => {
-          if (typingPostId) {
-            await deleteMessage(botClient, chatId, typingPostId);
-            typingPostId = undefined;
-          }
-        },
-        deliver: async (payload: ReplyPayload) => {
-          if (typingPostId) {
-            try {
-              if (payload.text) {
-                await updateMessage(botClient, chatId, typingPostId, payload.text);
-              } else {
-                await deleteMessage(botClient, chatId, typingPostId);
-              }
-            } catch {
-              if (payload.text) {
-                await sendMessage({ client: botClient, chatId, text: payload.text });
-              }
-            }
-            typingPostId = undefined;
-            return;
-          }
-          if (payload.text) {
-            await sendMessage({ client: botClient, chatId, text: payload.text });
-          }
-          if (payload.mediaUrl) {
-            await sendMessage({ client: botClient, chatId, mediaUrl: payload.mediaUrl });
-          }
-        },
-        onError: (err: unknown, info: { kind: string }) => {
-          console.error(`[ringcentral] ${info.kind} reply error:`, err);
-        },
-      },
-      replyOptions: {
-        agentId: route.agentId,
-        sessionKey,
-      },
-    });
-  } else {
-    // Fallback: just log that runtime dispatch isn't available
-    console.warn("[ringcentral] SDK dispatch not available, message not processed:", text.slice(0, 100));
+    return String((await client.getExtensionInfo()).id);
+  } catch {
+    return undefined;
   }
 }
 
