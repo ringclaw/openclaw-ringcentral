@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createBotClient, createOwnerClient } from "../client.js";
 import { createRingCentralHistoryTool } from "../history-tool.js";
 import { deleteMessage, sendMessage } from "../send.js";
+import { extractChatId } from "../targets.js";
+import type { RingCentralClient } from "../client.js";
 import type { Post } from "../types.js";
 
 const required = readBooleanEnv("RC_E2E_REQUIRED", false);
@@ -33,8 +35,9 @@ liveDescribe("RingCentral live smoke", () => {
       const ownerExtension = await ownerClient.getExtensionInfo();
       expect(ownerExtension.id).toBeTruthy();
 
-      const chat = await ownerClient.getChat(env.chatId);
+      const chat = await getChatMetadata({ ownerClient, botClient, chatId: env.chatId });
       expect(chat.id).toBe(env.chatId);
+      await assertOwnerCanReadHistory(ownerClient, env.chatId, env.recordCount);
 
       const sent = await sendMessage({
         client: botClient,
@@ -101,7 +104,7 @@ function readLiveEnv(): LiveEnv {
     ownerClientId: readRequired("RC_USER_CLIENT_ID"),
     ownerClientSecret: readRequired("RC_USER_CLIENT_SECRET"),
     ownerJwtToken: readRequired("RC_USER_JWT_TOKEN"),
-    chatId: readRequired("RC_E2E_CHAT_ID"),
+    chatId: normalizeChatId(readRequired("RC_E2E_CHAT_ID")),
     recordCount: readRecordCount(),
     cleanup: readBooleanEnv("RC_E2E_CLEANUP", true),
   };
@@ -109,6 +112,10 @@ function readLiveEnv(): LiveEnv {
     throw new Error(`Missing RingCentral live smoke variables: ${missing.join(", ")}`);
   }
   return env;
+}
+
+function normalizeChatId(raw: string): string {
+  return extractChatId(raw) ?? raw;
 }
 
 function readRecordCount(): number {
@@ -168,6 +175,44 @@ async function readRecentPosts(
     return (await client.listPosts(chatId, recordCount)).records ?? [];
   } catch {
     return (await client.listLegacyGroupPosts(chatId, recordCount)).records ?? [];
+  }
+}
+
+async function getChatMetadata(params: {
+  ownerClient: RingCentralClient;
+  botClient: RingCentralClient;
+  chatId: string;
+}) {
+  try {
+    return await params.ownerClient.getChat(params.chatId);
+  } catch (ownerErr) {
+    try {
+      const chat = await params.botClient.getChat(params.chatId);
+      console.log(
+        "[ringcentral-live] owner chat metadata lookup failed; bot metadata lookup succeeded",
+      );
+      return chat;
+    } catch {
+      throw ownerErr;
+    }
+  }
+}
+
+async function assertOwnerCanReadHistory(
+  ownerClient: RingCentralClient,
+  chatId: string,
+  recordCount: number,
+): Promise<void> {
+  try {
+    await readRecentPosts(ownerClient, chatId, Math.min(recordCount, 1));
+  } catch (err) {
+    throw new Error(
+      [
+        `Owner credentials cannot read RingCentral chat ${chatId}.`,
+        "Ensure RC_USER_JWT_TOKEN belongs to a user who is a member of RC_E2E_CHAT_ID.",
+        `Original error: ${err instanceof Error ? err.message : String(err)}`,
+      ].join(" "),
+    );
   }
 }
 
