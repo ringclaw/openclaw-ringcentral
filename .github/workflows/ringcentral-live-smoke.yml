@@ -12,6 +12,10 @@ on:
         required: false
         type: boolean
         default: true
+      ws_timeout_ms:
+        description: "Timeout for bot WebSocket connect/receive checks"
+        required: false
+        default: "30000"
 
 jobs:
   ringcentral-live-smoke:
@@ -26,6 +30,7 @@ jobs:
       RC_E2E_CHAT_ID: ${{ secrets.RC_E2E_CHAT_ID }}
       RC_E2E_RECORD_COUNT: ${{ inputs.record_count }}
       RC_E2E_CLEANUP: ${{ inputs.cleanup }}
+      RC_E2E_WS_TIMEOUT_MS: ${{ inputs.ws_timeout_ms }}
       RC_BOT_TOKEN: ${{ secrets.RC_BOT_TOKEN }}
       RC_USER_CLIENT_ID: ${{ secrets.RC_USER_CLIENT_ID }}
       RC_USER_CLIENT_SECRET: ${{ secrets.RC_USER_CLIENT_SECRET }}
