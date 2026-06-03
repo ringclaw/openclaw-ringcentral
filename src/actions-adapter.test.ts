@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { getEnabledActions, handleAction, type ActionName } from "./actions-adapter.js";
+import {
+  getEnabledActions,
+  handleAction,
+  ringCentralMessageActions,
+  type ActionName,
+} from "./actions-adapter.js";
 import * as actions from "./actions.js";
 
 vi.mock("./actions.js", () => ({
@@ -143,5 +148,34 @@ describe("handleAction", () => {
   it("returns error for unknown action", async () => {
     const result = await handleAction(mockClient, "unknown-action" as ActionName, {});
     expect(result).toEqual({ success: false, error: "Unknown action: unknown-action" });
+  });
+});
+
+describe("ringCentralMessageActions", () => {
+  const cfg = { channels: { ringcentral: { botToken: "bot" } } } as any;
+
+  it("describes shared OpenClaw message actions", () => {
+    const discovery = ringCentralMessageActions.describeMessageTool({ cfg });
+    expect(discovery?.actions).toEqual(["send", "read", "edit", "delete", "channel-info"]);
+    expect(discovery?.capabilities).toContain("delivery-pin");
+  });
+
+  it("returns no actions when unconfigured", () => {
+    expect(ringCentralMessageActions.describeMessageTool({ cfg: { channels: { ringcentral: {} } } as any })?.actions).toEqual([]);
+  });
+
+  it("extracts send target for shared send action", () => {
+    expect(ringCentralMessageActions.extractToolSend?.({ args: { action: "send", to: "ringcentral:group:g1" } })).toEqual({
+      to: "ringcentral:group:g1",
+    });
+  });
+
+  it("routes shared read action", async () => {
+    await ringCentralMessageActions.handleAction?.({
+      action: "read",
+      params: { to: "ringcentral:group:c1", count: 5 },
+      cfg,
+    } as any);
+    expect(actions.actionReadMessages).toHaveBeenCalledWith(expect.anything(), "c1", 5);
   });
 });

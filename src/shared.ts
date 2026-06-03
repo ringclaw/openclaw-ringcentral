@@ -13,7 +13,7 @@ export const RINGCENTRAL_CAPABILITIES = {
   chatTypes: ["direct", "group", "channel"] as Array<"direct" | "group" | "channel">,
   media: true,
   edit: true,
-  threads: false,
+  threads: true,
   reactions: false,
 };
 

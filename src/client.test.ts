@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { RingCentralClient, createBotClient, createPrivateClient } from "./client.js";
+import { RingCentralClient, createBotClient, createOwnerClient, createPrivateClient } from "./client.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -15,6 +15,7 @@ function jsonResponse(data: unknown, status = 200) {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
   mockFetch.mockReset();
 });
 
@@ -35,7 +36,29 @@ describe("RingCentralClient", () => {
 
     it("throws when no auth configured", async () => {
       const client = new RingCentralClient({ serverUrl: "https://api.example.com" });
-      await expect(client.sendPost("chat1", "hi")).rejects.toThrow("No authentication configured");
+      await expect(client.sendPost("chat1", "hi")).rejects.toThrow("No RingCentral authentication configured");
+    });
+
+    it("keeps owner JWT token cache per client instance", async () => {
+      const first = createOwnerClient("https://api.example.com", "cid1", "cs1", "jwt1");
+      const second = createOwnerClient("https://api.example.com", "cid2", "cs2", "jwt2");
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({ access_token: "access-1", expires_in: 3600 }))
+        .mockResolvedValueOnce(jsonResponse({ id: "p1" }))
+        .mockResolvedValueOnce(jsonResponse({ access_token: "access-2", expires_in: 3600 }))
+        .mockResolvedValueOnce(jsonResponse({ id: "p2" }));
+
+      await first.sendPost("c", "one");
+      await second.sendPost("c", "two");
+
+      expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(
+        `Basic ${Buffer.from("cid1:cs1").toString("base64")}`,
+      );
+      expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe(
+        `Basic ${Buffer.from("cid2:cs2").toString("base64")}`,
+      );
+      expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe("Bearer access-1");
+      expect(mockFetch.mock.calls[3][1].headers.Authorization).toBe("Bearer access-2");
     });
 
     it("strips trailing slash from serverUrl", async () => {
@@ -54,12 +77,30 @@ describe("RingCentralClient", () => {
       const client = createBotClient("https://api.example.com", "tok");
       mockFetch.mockResolvedValueOnce(jsonResponse({ error: "not found" }, 404));
       await expect(client.getChat("bad")).rejects.toThrow("HTTP 404");
+      expect(client.lastStatus).toBe(404);
     });
 
     it("handles 204 No Content", async () => {
       const client = createBotClient("https://api.example.com", "tok");
       mockFetch.mockResolvedValueOnce({ ok: true, status: 204, text: () => Promise.resolve("") });
       await expect(client.deletePost("c", "p")).resolves.toBeUndefined();
+    });
+
+    it("retries HTTP 429 with Retry-After", async () => {
+      vi.useFakeTimers();
+      const client = createBotClient("https://api.example.com", "tok");
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 429,
+          text: () => Promise.resolve("rate limited"),
+          headers: new Map([["Retry-After", "0.5"]]),
+        })
+        .mockResolvedValueOnce(jsonResponse({ id: "c1", type: "Group" }));
+      const promise = client.getChat("c1");
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(promise).resolves.toMatchObject({ id: "c1" });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -70,6 +111,22 @@ describe("RingCentralClient", () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: "p1", text: "hello", groupId: "c1", type: "TextMessage", creatorId: "u1", creationTime: "" }));
       const post = await client.sendPost("c1", "hello");
       expect(post.id).toBe("p1");
+    });
+
+    it("sendPost includes parentPostId or threadId", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "p1" }));
+      await client.sendPost("c1", "hello", { parentPostId: "12345" });
+      expect(JSON.parse(mockFetch.mock.calls.at(-1)![1].body)).toEqual({
+        text: "hello",
+        parentPostId: 12345,
+      });
+
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "p2" }));
+      await client.sendPost("c1", "hello", { threadId: "t-1" });
+      expect(JSON.parse(mockFetch.mock.calls.at(-1)![1].body)).toEqual({
+        text: "hello",
+        threadId: "t-1",
+      });
     });
 
     it("updatePost", async () => {
@@ -89,6 +146,27 @@ describe("RingCentralClient", () => {
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining("recordCount=10"),
         expect.anything(),
+      );
+    });
+
+    it("createWebSocketToken", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ uri: "wss://example", ws_access_token: "ws", expires_in: 60 }));
+      await expect(client.createWebSocketToken()).resolves.toMatchObject({ uri: "wss://example" });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/restapi/oauth/wstoken",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    it("uploadFile uses RingCentral file endpoint", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "file-post" }));
+      await client.uploadFile("chat 1", "image.png", new Uint8Array([1, 2]), "image/png");
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/team-messaging/v1/files?name=image.png&groupId=chat%201",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ "Content-Type": "image/png" }),
+        }),
       );
     });
   });
@@ -175,6 +253,11 @@ describe("factory functions", () => {
 
   it("createPrivateClient creates a client with credentials", () => {
     const client = createPrivateClient("https://api.example.com", "cid", "cs", "jwt");
+    expect(client).toBeInstanceOf(RingCentralClient);
+  });
+
+  it("createOwnerClient creates a client with credentials", () => {
+    const client = createOwnerClient("https://api.example.com", "cid", "cs", "jwt");
     expect(client).toBeInstanceOf(RingCentralClient);
   });
 });

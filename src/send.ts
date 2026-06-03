@@ -1,52 +1,151 @@
-// Outbound message delivery — send text and media to RingCentral.
+// Outbound message delivery: text, media, placeholders, and owner fallback.
 
-import type { RingCentralClient } from "./client.js";
+import { isAuthzOrNotFoundError, type RingCentralClient } from "./client.js";
 import { markdownToMiniMarkdown } from "./markdown.js";
+import { resolveReplyTransport, type ThreadParticipationTracker } from "./threading.js";
+import type { RingCentralReplyToMode } from "./types.js";
 
 export interface SendOptions {
   client: RingCentralClient;
+  fallbackClient?: RingCentralClient;
   chatId: string;
   text?: string;
   mediaUrl?: string;
-  replyToId?: string;
+  replyToId?: string | number | null;
+  threadId?: string | number | null;
+  replyToMode?: RingCentralReplyToMode;
+  noThreadChannels?: readonly string[];
+  tracker?: ThreadParticipationTracker;
+  markOwnPost?: (postId: string) => void;
   convertMarkdown?: boolean;
 }
 
-export async function sendMessage(opts: SendOptions): Promise<{ postId: string } | null> {
-  const { client, chatId, text, mediaUrl, convertMarkdown = true } = opts;
+export async function sendMessage(opts: SendOptions): Promise<{ postId: string; raw?: unknown } | null> {
+  const { text, mediaUrl, convertMarkdown = true } = opts;
 
   if (mediaUrl) {
-    try {
-      const resp = await fetch(mediaUrl);
-      if (resp.ok) {
-        const buf = Buffer.from(await resp.arrayBuffer());
-        const contentType = resp.headers.get("content-type") ?? "application/octet-stream";
-        const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
-        const post = await client.uploadFile(chatId, `image.${ext}`, buf, contentType);
-        return { postId: post.id };
-      }
-    } catch {
-      // Fall through to send as text link
+    const mediaResult = await sendMediaMessage(opts);
+    if (mediaResult) {
+      return mediaResult;
     }
   }
 
-  if (text) {
-    const finalText = convertMarkdown ? markdownToMiniMarkdown(text) : text;
-    const post = await client.sendPost(chatId, finalText);
-    return { postId: post.id };
+  if (!text) {
+    return null;
   }
+  const finalText = convertMarkdown ? markdownToMiniMarkdown(text) : text;
+  const transport = resolveReplyTransport({
+    chatId: opts.chatId,
+    replyToId: opts.replyToId,
+    threadId: opts.threadId,
+    replyToMode: opts.replyToMode ?? "first",
+    noThreadChannels: opts.noThreadChannels,
+    tracker: opts.tracker,
+  });
+  const post = await sendPostWithFallback(opts, finalText, transport);
+  opts.tracker?.remember(post.id);
+  opts.markOwnPost?.(post.id);
+  return { postId: post.id, raw: post };
+}
 
-  return null;
+async function sendMediaMessage(opts: SendOptions): Promise<{ postId: string; raw?: unknown } | null> {
+  if (!opts.mediaUrl) {
+    return null;
+  }
+  try {
+    const resp = await fetch(opts.mediaUrl);
+    if (!resp.ok) {
+      return null;
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const contentType = resp.headers.get("content-type") ?? "application/octet-stream";
+    const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
+    const post = await uploadWithFallback(opts, `image.${ext}`, buf, contentType);
+    opts.tracker?.remember(post.id);
+    opts.markOwnPost?.(post.id);
+    return { postId: post.id, raw: post };
+  } catch {
+    return null;
+  }
+}
+
+async function sendPostWithFallback(
+  opts: SendOptions,
+  text: string,
+  transport: { parentPostId?: string | number; threadId?: string | number },
+) {
+  try {
+    return await opts.client.sendPost(opts.chatId, text, transport);
+  } catch (err) {
+    if (opts.fallbackClient && isAuthzOrNotFoundError(err)) {
+      try {
+        return await opts.fallbackClient.sendPost(opts.chatId, text, transport);
+      } catch (fallbackErr) {
+        if (transport.parentPostId || transport.threadId) {
+          return await opts.fallbackClient.sendPost(opts.chatId, text);
+        }
+        throw fallbackErr;
+      }
+    }
+    if (transport.parentPostId || transport.threadId) {
+      try {
+        return await opts.client.sendPost(opts.chatId, text);
+      } catch (unthreadedErr) {
+        if (opts.fallbackClient && isAuthzOrNotFoundError(unthreadedErr)) {
+          return await opts.fallbackClient.sendPost(opts.chatId, text);
+        }
+        throw unthreadedErr;
+      }
+    }
+    throw err;
+  }
+}
+
+async function uploadWithFallback(
+  opts: SendOptions,
+  fileName: string,
+  fileData: Buffer,
+  contentType: string,
+) {
+  try {
+    return await opts.client.uploadFile(opts.chatId, fileName, fileData, contentType);
+  } catch (err) {
+    if (opts.fallbackClient && isAuthzOrNotFoundError(err)) {
+      return await opts.fallbackClient.uploadFile(opts.chatId, fileName, fileData, contentType);
+    }
+    throw err;
+  }
 }
 
 export async function sendTypingIndicator(
   client: RingCentralClient,
   chatId: string,
-  text = "🦞 is thinking...",
+  text = "👀",
+  opts: {
+    fallbackClient?: RingCentralClient;
+    replyToId?: string | number | null;
+    threadId?: string | number | null;
+    replyToMode?: RingCentralReplyToMode;
+    noThreadChannels?: readonly string[];
+    tracker?: ThreadParticipationTracker;
+    markOwnPost?: (postId: string) => void;
+  } = {},
 ): Promise<string | undefined> {
   try {
-    const post = await client.sendPost(chatId, text);
-    return post.id;
+    const result = await sendMessage({
+      client,
+      fallbackClient: opts.fallbackClient,
+      chatId,
+      text,
+      convertMarkdown: false,
+      replyToId: opts.replyToId,
+      threadId: opts.threadId,
+      replyToMode: opts.replyToMode,
+      noThreadChannels: opts.noThreadChannels,
+      tracker: opts.tracker,
+      markOwnPost: opts.markOwnPost,
+    });
+    return result?.postId;
   } catch {
     return undefined;
   }
@@ -71,6 +170,6 @@ export async function deleteMessage(
   try {
     await client.deletePost(chatId, postId);
   } catch {
-    // ignore
+    // ignore best-effort cleanup failures
   }
 }

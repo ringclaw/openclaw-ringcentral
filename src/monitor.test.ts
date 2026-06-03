@@ -1,18 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
-import { handleWSMessage, markSentPost } from "./monitor.js";
-import type { MonitorOptions } from "./monitor.js";
-import { ANSWER_START, THINKING_TEXT } from "./shared.js";
-
-function makeOpts(overrides?: Partial<MonitorOptions>): MonitorOptions {
-  return {
-    serverUrl: "https://api.example.com",
-    botToken: "tok",
-    onMessage: vi.fn(),
-    abortSignal: new AbortController().signal,
-    log: vi.fn(),
-    ...overrides,
-  };
-}
+import { describe, expect, it } from "vitest";
+import { extractPostFromWsFrame, markSentPost, shouldProcessPost } from "./monitor.js";
+import { ANSWER_START } from "./shared.js";
 
 function makeWSEvent(overrides?: Record<string, unknown>) {
   return [
@@ -36,92 +24,48 @@ function makeWSEvent(overrides?: Record<string, unknown>) {
   ];
 }
 
-describe("handleWSMessage", () => {
-  it("dispatches valid PostAdded TextMessage", () => {
-    const opts = makeOpts();
-    const sentPosts = new Map<string, number>();
-    handleWSMessage(makeWSEvent(), opts, sentPosts, undefined, vi.fn());
-    expect(opts.onMessage).toHaveBeenCalledWith(
+describe("extractPostFromWsFrame", () => {
+  it("extracts valid array PostAdded TextMessage frames", () => {
+    expect(extractPostFromWsFrame(makeWSEvent())).toEqual(
       expect.objectContaining({ id: "post-1", text: "Hello" }),
     );
   });
 
+  it("extracts valid object PostAdded TextMessage frames", () => {
+    const [, event] = makeWSEvent();
+    expect(extractPostFromWsFrame(event)).toEqual(expect.objectContaining({ id: "post-1" }));
+  });
+
   it("ignores non-PostAdded events", () => {
-    const opts = makeOpts();
-    const event = makeWSEvent();
-    (event[1] as any).event = "/team-messaging/v1/posts?eventType=PostChanged";
-    handleWSMessage(event, opts, new Map(), undefined, vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
+    const [, event] = makeWSEvent({ event: "/team-messaging/v1/posts?eventType=PostChanged" });
+    expect(extractPostFromWsFrame(event)).toBeNull();
   });
 
-  it("ignores non-TextMessage types", () => {
-    const opts = makeOpts();
-    const event = makeWSEvent();
-    (event[1] as any).body.type = "PersonJoined";
-    handleWSMessage(event, opts, new Map(), undefined, vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
+  it("ignores non-text events and malformed frames", () => {
+    const [, event] = makeWSEvent();
+    (event as any).body.type = "PersonJoined";
+    expect(extractPostFromWsFrame(event)).toBeNull();
+    expect(extractPostFromWsFrame([{}])).toBeNull();
+    expect(extractPostFromWsFrame({ event: "PostAdded" })).toBeNull();
+  });
+});
+
+describe("shouldProcessPost", () => {
+  const post = extractPostFromWsFrame(makeWSEvent())!;
+
+  it("blocks own sent posts and own creator messages", () => {
+    expect(shouldProcessPost(post, { sentPosts: new Map([["post-1", Date.now()]]) })).toBe(false);
+    expect(shouldProcessPost(post, { ownCreatorId: "user-1" })).toBe(false);
+    expect(shouldProcessPost(post, { ownCreatorId: "user-1", filterOwnCreator: false })).toBe(true);
   });
 
-  it("ignores messages in sentPosts", () => {
-    const opts = makeOpts();
-    const sentPosts = new Map<string, number>([["post-1", Date.now()]]);
-    handleWSMessage(makeWSEvent(), opts, sentPosts, undefined, vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
+  it("blocks answer wrappers and configured placeholder texts", () => {
+    expect(shouldProcessPost({ ...post, text: `${ANSWER_START}\nresponse` })).toBe(false);
+    expect(shouldProcessPost({ ...post, text: "👀" }, { ignoredTexts: ["👀", "⏳"] })).toBe(false);
   });
 
-  it("ignores messages from bot's own extension ID", () => {
-    const opts = makeOpts();
-    const event = makeWSEvent();
-    (event[1] as any).body.creatorId = "bot-ext-123";
-    handleWSMessage(event, opts, new Map(), "bot-ext-123", vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
-  });
-
-  it("ignores answer-wrapped messages", () => {
-    const opts = makeOpts();
-    const event = makeWSEvent();
-    (event[1] as any).body.text = `${ANSWER_START}\nsome response`;
-    handleWSMessage(event, opts, new Map(), undefined, vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
-  });
-
-  it("ignores thinking placeholder", () => {
-    const opts = makeOpts();
-    const event = makeWSEvent();
-    (event[1] as any).body.text = THINKING_TEXT;
-    handleWSMessage(event, opts, new Map(), undefined, vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
-  });
-
-  it("ignores arrays with fewer than 2 elements", () => {
-    const opts = makeOpts();
-    handleWSMessage([{}], opts, new Map(), undefined, vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
-  });
-
-  it("ignores events with no body", () => {
-    const opts = makeOpts();
-    const event = makeWSEvent();
-    (event[1] as any).body = undefined;
-    handleWSMessage(event, opts, new Map(), undefined, vi.fn());
-    expect(opts.onMessage).not.toHaveBeenCalled();
-  });
-
-  it("cleans expired sentPosts entries", () => {
-    const opts = makeOpts();
-    const sentPosts = new Map<string, number>([
-      ["old-post", Date.now() - 400_000],
-      ["recent-post", Date.now()],
-    ]);
-    handleWSMessage(makeWSEvent(), opts, sentPosts, undefined, vi.fn());
-    expect(sentPosts.has("old-post")).toBe(false);
-    expect(sentPosts.has("recent-post")).toBe(true);
-  });
-
-  it("allows messages from other users even when botExtensionId set", () => {
-    const opts = makeOpts();
-    handleWSMessage(makeWSEvent(), opts, new Map(), "bot-ext-999", vi.fn());
-    expect(opts.onMessage).toHaveBeenCalled();
+  it("allows normal user messages", () => {
+    expect(shouldProcessPost(post, { ownCreatorId: "other" })).toBe(true);
   });
 });
 
