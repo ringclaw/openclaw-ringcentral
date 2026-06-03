@@ -261,7 +261,16 @@ function readBooleanEnv(name: string, fallback: boolean): boolean {
 function buildUniqueText(label: string): string {
   const runId = process.env.GITHUB_RUN_ID ?? "local";
   const attempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
-  return `[openclaw-ringcentral-e2e:${label}:${runId}:${attempt}:${Date.now()}]`;
+  const marker = `[openclaw-ringcentral-e2e:${label}:${runId}:${attempt}:${Date.now()}]`;
+  const sourceUrl = process.env.RC_E2E_SOURCE_URL?.trim();
+  const commitSha = process.env.RC_E2E_COMMIT_SHA?.trim();
+  return [
+    marker,
+    sourceUrl ? `source: ${sourceUrl}` : "",
+    commitSha ? `commit: ${commitSha}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function waitForPost(
