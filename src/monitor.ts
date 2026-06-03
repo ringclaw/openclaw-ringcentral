@@ -143,6 +143,7 @@ export class RingCentralWebSocketMonitor {
 
         const post = extractPostFromWsFrame(parsed);
         if (post) {
+          onDiagnostic?.("ws_post_received");
           this.handlePost(post, log);
         }
       });
@@ -211,15 +212,18 @@ export function extractPostFromWsFrame(frame: unknown): Post | null {
     return null;
   }
   const record = event as Partial<WSEvent> & Record<string, unknown>;
-  if (typeof record.event !== "string" || !record.event.includes("PostAdded")) {
-    return null;
-  }
   const post = record.body;
   if (!post || typeof post !== "object") {
     return null;
   }
   const candidate = post as Post;
-  return candidate.type === "TextMessage" ? candidate : null;
+  if (!isPostAddedEvent(record, candidate)) {
+    return null;
+  }
+  if (candidate.type && candidate.type !== "TextMessage") {
+    return null;
+  }
+  return typeof candidate.text === "string" ? candidate : null;
 }
 
 export function shouldProcessPost(
@@ -300,6 +304,13 @@ function readRejectedClientRequestStatus(value: unknown): number | undefined {
     return undefined;
   }
   return status;
+}
+
+function isPostAddedEvent(record: Record<string, unknown>, post: Partial<Post>): boolean {
+  if (post.eventType === "PostAdded") {
+    return true;
+  }
+  return typeof record.event === "string" && record.event.includes("PostAdded");
 }
 
 function createMessageId(): string {
