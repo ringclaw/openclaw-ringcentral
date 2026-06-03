@@ -1,0 +1,65 @@
+name: RingCentral Live Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_count:
+        description: "Recent message count to inspect"
+        required: false
+        default: "50"
+      cleanup:
+        description: "Delete test messages after verification"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  ringcentral-live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ringcentral-live
+    permissions:
+      contents: read
+    env:
+      RC_E2E_ENABLED: "true"
+      RC_SERVER_URL: ${{ secrets.RC_SERVER_URL || 'https://platform.ringcentral.com' }}
+      RC_E2E_CHAT_ID: ${{ secrets.RC_E2E_CHAT_ID }}
+      RC_E2E_RECORD_COUNT: ${{ inputs.record_count }}
+      RC_E2E_CLEANUP: ${{ inputs.cleanup }}
+      RC_BOT_TOKEN: ${{ secrets.RC_BOT_TOKEN }}
+      RC_USER_CLIENT_ID: ${{ secrets.RC_USER_CLIENT_ID }}
+      RC_USER_CLIENT_SECRET: ${{ secrets.RC_USER_CLIENT_SECRET }}
+      RC_USER_JWT_TOKEN: ${{ secrets.RC_USER_JWT_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run RingCentral live smoke
+        run: pnpm test:live:ringcentral
