@@ -382,4 +382,33 @@ describe("ringCentralMessageActions", () => {
     } as any);
     expect(actions.actionReadMessages).toHaveBeenCalledWith(expect.anything(), "c1", 5);
   });
+
+  it("uses bot client for shared actions even when owner credentials are configured", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ id: 123, extensionNumber: "101", name: "Bot" })),
+      headers: new Map(),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = __testing.createActionClient({
+      channels: {
+        ringcentral: {
+          botToken: "bot-token",
+          ownerCredentials: { clientId: "cid", clientSecret: "secret", jwt: "jwt" },
+          server: "https://api.example.com",
+        },
+      },
+    } as any);
+    await client.getExtensionInfo();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.com/restapi/v1.0/account/~/extension/~",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer bot-token" }),
+      }),
+    );
+  });
 });

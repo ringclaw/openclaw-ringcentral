@@ -4,10 +4,76 @@
   "description": "OpenClaw RingCentral Team Messaging channel plugin",
   "channels": ["ringcentral"],
   "contracts": {
-    "tools": ["ringcentral_get_recent_messages"]
+    "tools": [
+      "ringcentral_get_recent_messages",
+      "ringcentral_confirm_artifact_action",
+      "ringcentral_create_adaptive_card",
+      "ringcentral_get_adaptive_card",
+      "ringcentral_update_adaptive_card",
+      "ringcentral_delete_adaptive_card",
+      "ringcentral_list_notes",
+      "ringcentral_create_note",
+      "ringcentral_get_note",
+      "ringcentral_update_note",
+      "ringcentral_delete_note",
+      "ringcentral_publish_note",
+      "ringcentral_list_calendar_events",
+      "ringcentral_create_calendar_event",
+      "ringcentral_get_calendar_event",
+      "ringcentral_update_calendar_event",
+      "ringcentral_delete_calendar_event"
+    ]
   },
   "toolMetadata": {
     "ringcentral_get_recent_messages": {
+      "optional": true
+    },
+    "ringcentral_confirm_artifact_action": {
+      "optional": true
+    },
+    "ringcentral_create_adaptive_card": {
+      "optional": true
+    },
+    "ringcentral_get_adaptive_card": {
+      "optional": true
+    },
+    "ringcentral_update_adaptive_card": {
+      "optional": true
+    },
+    "ringcentral_delete_adaptive_card": {
+      "optional": true
+    },
+    "ringcentral_list_notes": {
+      "optional": true
+    },
+    "ringcentral_create_note": {
+      "optional": true
+    },
+    "ringcentral_get_note": {
+      "optional": true
+    },
+    "ringcentral_update_note": {
+      "optional": true
+    },
+    "ringcentral_delete_note": {
+      "optional": true
+    },
+    "ringcentral_publish_note": {
+      "optional": true
+    },
+    "ringcentral_list_calendar_events": {
+      "optional": true
+    },
+    "ringcentral_create_calendar_event": {
+      "optional": true
+    },
+    "ringcentral_get_calendar_event": {
+      "optional": true
+    },
+    "ringcentral_update_calendar_event": {
+      "optional": true
+    },
+    "ringcentral_delete_calendar_event": {
       "optional": true
     }
   },
