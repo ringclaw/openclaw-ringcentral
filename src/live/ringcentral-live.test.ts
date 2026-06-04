@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { describe, it } from "vitest";
 import {
   RingCentralApiError,
@@ -22,18 +23,26 @@ const liveDescribe = enabled ? describe : describe.skip;
 
 liveDescribe("RingCentral live smoke", () => {
   it("validates bot send, owner read, history, bot receive, bot read, and bot reply", async () => {
-    const env = readLiveEnv();
-    const botClient = createBotClient(env.serverUrl, env.botToken);
-    const ownerClient = createOwnerClient(
-      env.serverUrl,
-      env.ownerClientId,
-      env.ownerClientSecret,
-      env.ownerJwtToken,
-    );
+    const summary = createLiveSummary("openclaw-ringcentral");
+    summary.setContext(buildBaseSummaryContext());
+    activeSummary = summary;
+    let env: LiveEnv | undefined;
+    let botClient: RingCentralClient | undefined;
+    let ownerClient: RingCentralClient | undefined;
     const createdBotPostIds: string[] = [];
     const createdOwnerPostIds: string[] = [];
 
     try {
+      env = readLiveEnv();
+      summary.setContext(buildSummaryContext(env));
+      botClient = createBotClient(env.serverUrl, env.botToken);
+      ownerClient = createOwnerClient(
+        env.serverUrl,
+        env.ownerClientId,
+        env.ownerClientSecret,
+        env.ownerJwtToken,
+      );
+
       logSafe("live_start", { chat: maskId(env.chatId) });
 
       const botExtension = await liveStep("bot_auth", () => botClient.getExtensionInfo());
@@ -69,15 +78,27 @@ liveDescribe("RingCentral live smoke", () => {
         createdBotPostIds,
         createdOwnerPostIds,
       });
+    } catch (err) {
+      summary.fail(err);
+      throw err;
     } finally {
-      await cleanupPosts({
-        cleanup: env.cleanup,
-        chatId: env.chatId,
-        botClient,
-        ownerClient,
-        botPostIds: createdBotPostIds,
-        ownerPostIds: createdOwnerPostIds,
-      });
+      try {
+        if (env && botClient && ownerClient) {
+          await cleanupPosts({
+            cleanup: env.cleanup,
+            chatId: env.chatId,
+            botClient,
+            ownerClient,
+            botPostIds: createdBotPostIds,
+            ownerPostIds: createdOwnerPostIds,
+          });
+        }
+      } finally {
+        summary.write();
+        if (activeSummary === summary) {
+          activeSummary = undefined;
+        }
+      }
     }
   });
 });
@@ -100,6 +121,119 @@ interface LiveClients {
   ownerClient: RingCentralClient;
   createdBotPostIds: string[];
   createdOwnerPostIds?: string[];
+}
+
+type SummaryDetail = boolean | number | string;
+
+interface SummaryRow {
+  stage: string;
+  status: "info" | "ok" | "failed";
+  durationMs?: number;
+  details: Record<string, SummaryDetail>;
+}
+
+class LiveSummary {
+  private readonly rows = new Map<string, SummaryRow>();
+  private readonly context: Record<string, SummaryDetail> = {};
+  private status: "passed" | "failed" = "passed";
+  private failure: { stage: string; error: string } | undefined;
+
+  constructor(private readonly name: string) {}
+
+  setContext(details: Record<string, SummaryDetail>): void {
+    Object.assign(this.context, details);
+  }
+
+  record(stage: string, details: Record<string, SummaryDetail>): void {
+    const row = this.rows.get(stage) ?? {
+      stage,
+      status: "info",
+      details: {},
+    };
+    Object.assign(row.details, details);
+    if (details.ok === true) {
+      row.status = "ok";
+    } else if (details.ok === false) {
+      row.status = "failed";
+    }
+    if (typeof details.duration_ms === "number") {
+      row.durationMs = details.duration_ms;
+    }
+    this.rows.set(stage, row);
+  }
+
+  fail(err: unknown): void {
+    this.status = "failed";
+    this.failure = summarizeFailureForSummary(err);
+    this.record(this.failure.stage, {
+      ok: false,
+      error: this.failure.error,
+    });
+  }
+
+  write(): void {
+    const summaryPath = process.env.GITHUB_STEP_SUMMARY?.trim();
+    if (!summaryPath) {
+      return;
+    }
+    appendFileSync(summaryPath, `${this.toMarkdown()}\n`, "utf8");
+  }
+
+  private toMarkdown(): string {
+    const contextRows = Object.entries(this.context)
+      .map(([key, value]) => `| ${escapeMarkdownCell(key)} | ${escapeMarkdownCell(value)} |`)
+      .join("\n");
+    const stageRows = Array.from(this.rows.values())
+      .map((row) => {
+        const details = Object.entries(row.details)
+          .filter(([key]) => key !== "ok" && key !== "duration_ms")
+          .map(([key, value]) => `${key}=${value}`)
+          .join(" ");
+        return `| ${escapeMarkdownCell(row.stage)} | ${escapeMarkdownCell(row.status)} | ${escapeMarkdownCell(row.durationMs ?? "")} | ${escapeMarkdownCell(details)} |`;
+      })
+      .join("\n");
+    const failure = this.failure
+      ? `\n\nFailure: ${escapeMarkdownCell(this.failure.stage)} ${escapeMarkdownCell(this.failure.error)}`
+      : "";
+    return [
+      `## ${this.name} live smoke`,
+      "",
+      `Overall: ${this.status}`,
+      "",
+      "| Context | Value |",
+      "| --- | --- |",
+      contextRows || "| none | none |",
+      "",
+      "| Stage | Status | Duration ms | Details |",
+      "| --- | --- | ---: | --- |",
+      stageRows || "| none | info |  |  |",
+      failure,
+    ].join("\n");
+  }
+}
+
+let activeSummary: LiveSummary | undefined;
+
+function createLiveSummary(name: string): LiveSummary {
+  return new LiveSummary(name);
+}
+
+function buildSummaryContext(env: LiveEnv): Record<string, SummaryDetail> {
+  return {
+    ...buildBaseSummaryContext(),
+    cleanup: env.cleanup,
+    record_count: env.recordCount,
+    ws_timeout_ms: env.wsTimeoutMs,
+  };
+}
+
+function buildBaseSummaryContext(): Record<string, SummaryDetail> {
+  return {
+    repository: process.env.GITHUB_REPOSITORY ?? "local",
+    event: process.env.GITHUB_EVENT_NAME ?? "local",
+    source_present: Boolean(process.env.RC_E2E_SOURCE_URL?.trim()),
+    commit_present: Boolean(process.env.RC_E2E_COMMIT_SHA?.trim()),
+  };
 }
 
 async function runBotSendOwnerReadScenario(params: LiveClients): Promise<void> {
@@ -521,10 +655,12 @@ function maskId(value: unknown): string {
 }
 
 function logSafe(event: string, details: Record<string, boolean | number | string> = {}): void {
-  const suffix = Object.entries(details)
+  const safeDetails = formatSafeDetails(details);
+  const suffix = Object.entries(safeDetails)
     .map(([key, value]) => `${key}=${value}`)
     .join(" ");
   console.log(`[ringcentral-live] event=${event}${suffix ? ` ${suffix}` : ""}`);
+  activeSummary?.record(event, safeDetails);
 }
 
 function sanitizeDiagnostic(
@@ -538,6 +674,83 @@ function sanitizeDiagnostic(
     }
   }
   return safe;
+}
+
+function formatSafeDetails(
+  details: Record<string, boolean | number | string>,
+): Record<string, SummaryDetail> {
+  return Object.fromEntries(
+    Object.entries(details).map(([key, value]) => [key, formatSafeValue(value)]),
+  );
+}
+
+function formatSafeValue(value: boolean | number | string): SummaryDetail {
+  if (typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  const raw = String(value);
+  if (
+    raw.startsWith("<masked:length=") ||
+    safeStringValues.has(raw) ||
+    /^HTTP \d{3}(?: [A-Z0-9_-]+)?$/.test(raw)
+  ) {
+    return raw;
+  }
+  return "<masked>";
+}
+
+const safeStringValues = new Set([
+  "<masked>",
+  "ws_connected",
+  "ws_subscription_confirmed",
+  "ws_subscription_rejected",
+  "ws_subscription_request_sent",
+  "ws_post_received",
+  "timeout",
+  "assertion failed",
+  "failed",
+  "missing required variables",
+]);
+
+function summarizeFailureForSummary(err: unknown): { stage: string; error: string } {
+  if (err instanceof Error) {
+    const liveFailure = err.message.match(
+      /^RingCentral live smoke failed at ([a-z0-9_]+): (.+)$/,
+    );
+    if (liveFailure) {
+      return {
+        stage: liveFailure[1],
+        error: sanitizeFailureMessage(liveFailure[2]),
+      };
+    }
+    if (err.message.startsWith("Missing RingCentral live smoke variables:")) {
+      return {
+        stage: "configuration",
+        error: "missing required variables",
+      };
+    }
+  }
+  return {
+    stage: "unknown",
+    error: "failed",
+  };
+}
+
+function sanitizeFailureMessage(message: string): string {
+  const clean = message.trim();
+  if (/^HTTP \d{3}(?: [A-Z0-9_-]+)?$/.test(clean)) {
+    return clean;
+  }
+  if (safeStringValues.has(clean)) {
+    return clean;
+  }
+  return "failed";
+}
+
+function escapeMarkdownCell(value: SummaryDetail | ""): string {
+  return String(value)
+    .replaceAll("|", "\\|")
+    .replaceAll("\n", " ");
 }
 
 function createDeferred<T>() {
