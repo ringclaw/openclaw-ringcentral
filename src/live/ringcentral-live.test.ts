@@ -233,6 +233,9 @@ function buildBaseSummaryContext(): Record<string, SummaryDetail> {
     event: process.env.GITHUB_EVENT_NAME ?? "local",
     source_present: Boolean(process.env.RC_E2E_SOURCE_URL?.trim()),
     commit_present: Boolean(process.env.RC_E2E_COMMIT_SHA?.trim()),
+    cleanup: readBooleanEnv("RC_E2E_CLEANUP", false),
+    record_count: readRecordCount(),
+    ws_timeout_ms: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
   };
 }
 
@@ -354,7 +357,7 @@ function readLiveEnv(): LiveEnv {
     ownerJwtToken: readRequired("RC_USER_JWT_TOKEN"),
     chatId: normalizeChatId(readRequired("RC_E2E_CHAT_ID")),
     recordCount: readRecordCount(),
-    cleanup: readBooleanEnv("RC_E2E_CLEANUP", true),
+    cleanup: readBooleanEnv("RC_E2E_CLEANUP", false),
     wsTimeoutMs: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
   };
   if (missing.length > 0) {
