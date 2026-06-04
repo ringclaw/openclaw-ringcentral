@@ -502,7 +502,7 @@ function buildUniqueText(label: string): string {
 function buildAdaptiveCard(text: string): CreateAdaptiveCardRequest {
   return {
     type: "AdaptiveCard",
-    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    $schema: "https://adaptivecards.io/schemas/adaptive-card.json",
     version: "1.3",
     body: [{ type: "TextBlock", text, wrap: true }],
   };
