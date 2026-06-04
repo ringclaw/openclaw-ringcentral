@@ -23,6 +23,10 @@ const CHAT_SCOPED_ACTIONS = new Set<ActionName>([
   "create-task",
   "list-notes",
   "create-note",
+  "get-note",
+  "update-note",
+  "delete-note",
+  "publish-note",
   "create-adaptive-card",
   "get-adaptive-card",
   "update-adaptive-card",
@@ -98,6 +102,7 @@ export type ActionName =
   | "delete-event"
   | "list-notes"
   | "create-note"
+  | "get-note"
   | "update-note"
   | "delete-note"
   | "publish-note"
@@ -131,7 +136,7 @@ export function getEnabledActions(config: ActionConfig = {}): ActionName[] {
     all.push("list-events", "create-event", "update-event", "delete-event");
   }
   if (config.notes !== false) {
-    all.push("list-notes", "create-note", "update-note", "delete-note", "publish-note");
+    all.push("list-notes", "create-note", "get-note", "update-note", "delete-note", "publish-note");
   }
   if (config.adaptiveCards !== false) {
     all.push(
@@ -360,12 +365,19 @@ async function executeAction(
     case "create-note": {
       const title = String(params.title ?? "");
       const body = params.body ? String(params.body) : undefined;
-      return actions.actionCreateNote(client, chatId, title, body);
+      const publish = Boolean(params.publish ?? params.publishImmediately);
+      return actions.actionCreateNote(client, chatId, title, body, publish);
+    }
+    case "get-note": {
+      const noteId = String(params.noteId ?? params.id ?? "");
+      return actions.actionGetNote(client, noteId);
     }
     case "update-note": {
       const noteId = String(params.noteId ?? params.id ?? "");
-      const title = String(params.title ?? "");
-      return actions.actionUpdateNote(client, noteId, title);
+      return actions.actionUpdateNote(client, noteId, {
+        title: params.title ? String(params.title) : undefined,
+        body: params.body ? String(params.body) : undefined,
+      });
     }
     case "delete-note": {
       const noteId = String(params.noteId ?? params.id ?? "");

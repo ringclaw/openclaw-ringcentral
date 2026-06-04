@@ -2,7 +2,7 @@
 // Used by actions-adapter.ts to handle OpenClaw agent tool calls.
 
 import type { RingCentralClient } from "./client.js";
-import type { CreateAdaptiveCardRequest } from "./types.js";
+import type { CreateAdaptiveCardRequest, CreateNoteRequest } from "./types.js";
 
 export async function actionSendMessage(
   client: RingCentralClient,
@@ -223,11 +223,29 @@ export async function actionCreateNote(
   chatId: string,
   title: string,
   body?: string,
-): Promise<{ success: boolean; noteId?: string; error?: string }> {
+  publish = false,
+): Promise<{ success: boolean; noteId?: string; published?: boolean; error?: string }> {
   try {
     const note = await client.createNote(chatId, { title, body });
-    await client.publishNote(note.id);
-    return { success: true, noteId: note.id };
+    if (publish) {
+      await client.publishNote(note.id);
+    }
+    return { success: true, noteId: note.id, published: publish };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+export async function actionGetNote(
+  client: RingCentralClient,
+  noteId: string,
+): Promise<{ success: boolean; note?: { id: string; title: string; body?: string; status?: string }; error?: string }> {
+  try {
+    const note = await client.getNote(noteId);
+    return {
+      success: true,
+      note: { id: note.id, title: note.title, body: note.body, status: note.status },
+    };
   } catch (err) {
     return { success: false, error: String(err) };
   }
@@ -236,10 +254,10 @@ export async function actionCreateNote(
 export async function actionUpdateNote(
   client: RingCentralClient,
   noteId: string,
-  title: string,
+  updates: Partial<CreateNoteRequest>,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    await client.updateNote(noteId, { title });
+    await client.updateNote(noteId, updates);
     return { success: true };
   } catch (err) {
     return { success: false, error: String(err) };
