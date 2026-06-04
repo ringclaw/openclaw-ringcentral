@@ -7,6 +7,7 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { RingCentralClient } from "./client.js";
+import type { CreateAdaptiveCardRequest } from "./types.js";
 import { createBotClient, createOwnerClient } from "./client.js";
 import { getRcConfig, hasOwnerCredentials, isAccountConfigured, resolveAccount } from "./accounts.js";
 import * as actions from "./actions.js";
@@ -22,6 +23,10 @@ const CHAT_SCOPED_ACTIONS = new Set<ActionName>([
   "create-task",
   "list-notes",
   "create-note",
+  "create-adaptive-card",
+  "get-adaptive-card",
+  "update-adaptive-card",
+  "delete-adaptive-card",
 ]);
 
 const PROTECTED_ACTIONS = new Set<ActionName>([
@@ -33,6 +38,8 @@ const PROTECTED_ACTIONS = new Set<ActionName>([
   "update-event",
   "update-note",
   "edit-message",
+  "update-adaptive-card",
+  "delete-adaptive-card",
 ]);
 
 const PENDING_ACTION_TTL_MS = 2 * 60 * 1000; // 2 minutes
@@ -61,7 +68,16 @@ function generateNonce(): string {
 }
 
 function buildConfirmationSummary(action: ActionName, params: Record<string, unknown>): string {
-  const id = String(params.taskId ?? params.eventId ?? params.noteId ?? params.postId ?? params.id ?? params.messageId ?? "");
+  const id = String(
+    params.taskId ??
+      params.eventId ??
+      params.noteId ??
+      params.cardId ??
+      params.postId ??
+      params.id ??
+      params.messageId ??
+      "",
+  );
   return `Confirm ${action}${id ? ` (id: ${id})` : ""}?`;
 }
 
@@ -85,6 +101,10 @@ export type ActionName =
   | "update-note"
   | "delete-note"
   | "publish-note"
+  | "create-adaptive-card"
+  | "get-adaptive-card"
+  | "update-adaptive-card"
+  | "delete-adaptive-card"
   | "confirm-action";
 
 export interface ActionConfig {
@@ -93,6 +113,7 @@ export interface ActionConfig {
   tasks?: boolean;
   events?: boolean;
   notes?: boolean;
+  adaptiveCards?: boolean;
 }
 
 export function getEnabledActions(config: ActionConfig = {}): ActionName[] {
@@ -111,6 +132,14 @@ export function getEnabledActions(config: ActionConfig = {}): ActionName[] {
   }
   if (config.notes !== false) {
     all.push("list-notes", "create-note", "update-note", "delete-note", "publish-note");
+  }
+  if (config.adaptiveCards !== false) {
+    all.push(
+      "create-adaptive-card",
+      "get-adaptive-card",
+      "update-adaptive-card",
+      "delete-adaptive-card",
+    );
   }
   all.push("confirm-action");
   return all;
@@ -137,6 +166,30 @@ function agentToolResult(details: unknown): AgentToolResult<unknown> {
 function readTargetChatId(params: Record<string, unknown>): string {
   const target = String(params.to ?? params.chatId ?? params.chat_id ?? "");
   return extractChatId(target) ?? target;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readAdaptiveCardPayload(params: Record<string, unknown>): CreateAdaptiveCardRequest {
+  if (isRecord(params.card)) {
+    return { ...params.card, type: "AdaptiveCard" } as CreateAdaptiveCardRequest;
+  }
+  if (Array.isArray(params.body)) {
+    return {
+      type: "AdaptiveCard",
+      body: params.body,
+      version: String(params.version ?? "1.3"),
+      ...(Array.isArray(params.actions) ? { actions: params.actions } : {}),
+    };
+  }
+  const text = String(params.text ?? params.title ?? "RingCentral Adaptive Card");
+  return {
+    type: "AdaptiveCard",
+    version: "1.3",
+    body: [{ type: "TextBlock", text, wrap: true }],
+  };
 }
 
 function createActionClient(cfg: unknown): RingCentralClient {
@@ -321,6 +374,20 @@ async function executeAction(
     case "publish-note": {
       const noteId = String(params.noteId ?? params.id ?? "");
       return actions.actionPublishNote(client, noteId);
+    }
+    case "create-adaptive-card":
+      return actions.actionCreateAdaptiveCard(client, chatId, readAdaptiveCardPayload(params));
+    case "get-adaptive-card": {
+      const cardId = String(params.cardId ?? params.id ?? "");
+      return actions.actionGetAdaptiveCard(client, cardId);
+    }
+    case "update-adaptive-card": {
+      const cardId = String(params.cardId ?? params.id ?? "");
+      return actions.actionUpdateAdaptiveCard(client, cardId, readAdaptiveCardPayload(params));
+    }
+    case "delete-adaptive-card": {
+      const cardId = String(params.cardId ?? params.id ?? "");
+      return actions.actionDeleteAdaptiveCard(client, cardId);
     }
     default:
       return { success: false, error: `Unknown action: ${action}` };

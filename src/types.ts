@@ -234,6 +234,7 @@ export interface RingCentralConfig {
     tasks?: boolean;
     events?: boolean;
     notes?: boolean;
+    adaptiveCards?: boolean;
   };
 }
 

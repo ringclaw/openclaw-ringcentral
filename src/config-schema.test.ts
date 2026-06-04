@@ -48,7 +48,7 @@ describe("ringCentralConfigSchema", () => {
       textChunkLimit: 2000,
       allowBots: false,
       workspace: "/tmp/workspace",
-      actions: { messages: true, channelInfo: true, tasks: true, events: true, notes: true },
+      actions: { messages: true, channelInfo: true, tasks: true, events: true, notes: true, adaptiveCards: true },
     });
     expect(result.success).toBe(true);
   });
@@ -92,7 +92,7 @@ describe("ringCentralConfigSchema", () => {
 
   it("accepts actions with all false", () => {
     const result = ringCentralConfigSchema.safeParse({
-      actions: { messages: false, channelInfo: false, tasks: false, events: false, notes: false },
+      actions: { messages: false, channelInfo: false, tasks: false, events: false, notes: false, adaptiveCards: false },
     });
     expect(result.success).toBe(true);
   });
