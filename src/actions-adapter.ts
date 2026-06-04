@@ -21,6 +21,11 @@ const CHAT_SCOPED_ACTIONS = new Set<ActionName>([
   "channel-info",
   "list-tasks",
   "create-task",
+  "list-events",
+  "create-event",
+  "get-event",
+  "update-event",
+  "delete-event",
   "list-notes",
   "create-note",
   "get-note",
@@ -98,6 +103,7 @@ export type ActionName =
   | "delete-task"
   | "list-events"
   | "create-event"
+  | "get-event"
   | "update-event"
   | "delete-event"
   | "list-notes"
@@ -133,7 +139,7 @@ export function getEnabledActions(config: ActionConfig = {}): ActionName[] {
     all.push("list-tasks", "create-task", "update-task", "complete-task", "delete-task");
   }
   if (config.events !== false) {
-    all.push("list-events", "create-event", "update-event", "delete-event");
+    all.push("list-events", "create-event", "get-event", "update-event", "delete-event");
   }
   if (config.notes !== false) {
     all.push("list-notes", "create-note", "get-note", "update-note", "delete-note", "publish-note");
@@ -341,19 +347,25 @@ async function executeAction(
       return actions.actionDeleteTask(client, taskId);
     }
     case "list-events":
-      return actions.actionListEvents(client);
+      return actions.actionListEvents(client, chatId);
     case "create-event": {
       const title = String(params.title ?? "");
       const startTime = String(params.startTime ?? params.start ?? "");
       const endTime = String(params.endTime ?? params.end ?? "");
-      return actions.actionCreateEvent(client, title, startTime, endTime);
+      const description = params.description ? String(params.description) : undefined;
+      return actions.actionCreateEvent(client, chatId, title, startTime, endTime, description);
+    }
+    case "get-event": {
+      const eventId = String(params.eventId ?? params.id ?? "");
+      return actions.actionGetEvent(client, eventId);
     }
     case "update-event": {
       const eventId = String(params.eventId ?? params.id ?? "");
       return actions.actionUpdateEvent(client, eventId, {
-        title: params.title ? String(params.title) : undefined,
-        startTime: params.startTime ? String(params.startTime) : undefined,
-        endTime: params.endTime ? String(params.endTime) : undefined,
+        title: String(params.title ?? ""),
+        startTime: String(params.startTime ?? params.start ?? ""),
+        endTime: String(params.endTime ?? params.end ?? ""),
+        description: params.description ? String(params.description) : undefined,
       });
     }
     case "delete-event": {

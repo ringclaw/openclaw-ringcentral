@@ -214,10 +214,52 @@ describe("RingCentralClient", () => {
   describe("events", () => {
     const client = createBotClient("https://api.example.com", "tok");
 
-    it("createEvent", async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "e1", title: "Meeting" }));
-      const event = await client.createEvent({ title: "Meeting", startTime: "2026-01-01T10:00:00Z", endTime: "2026-01-01T11:00:00Z" });
+    it("uses group scoped endpoints for list and create events", async () => {
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({ records: [{ id: "e1", title: "Meeting" }] }))
+        .mockResolvedValueOnce(jsonResponse({ id: "e1", title: "Meeting" }));
+
+      const events = await client.listEvents("g1", 10);
+      const event = await client.createEvent("g1", { title: "Meeting", startTime: "2026-01-01T10:00:00Z", endTime: "2026-01-01T11:00:00Z" });
+
+      expect(events.records[0].id).toBe("e1");
       expect(event.id).toBe("e1");
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        "https://api.example.com/team-messaging/v1/groups/g1/events?recordCount=10",
+        expect.objectContaining({ method: "GET" }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        "https://api.example.com/team-messaging/v1/groups/g1/events",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    it("uses global get, put, and delete event endpoints", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "e1", title: "Meeting" }));
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "e1", title: "Updated" }));
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 204, text: () => Promise.resolve("") });
+
+      await client.getEvent("e1");
+      await client.updateEvent("e1", { title: "Updated", startTime: "2026-01-01T10:00:00Z", endTime: "2026-01-01T11:00:00Z" });
+      await client.deleteEvent("e1");
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        "https://api.example.com/team-messaging/v1/events/e1",
+        expect.objectContaining({ method: "GET" }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        "https://api.example.com/team-messaging/v1/events/e1",
+        expect.objectContaining({ method: "PUT" }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        "https://api.example.com/team-messaging/v1/events/e1",
+        expect.objectContaining({ method: "DELETE" }),
+      );
     });
   });
 

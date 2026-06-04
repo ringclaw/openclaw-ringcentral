@@ -147,9 +147,10 @@ export async function actionDeleteTask(
 
 export async function actionListEvents(
   client: RingCentralClient,
+  chatId: string,
 ): Promise<{ success: boolean; events?: Array<{ id: string; title: string; startTime: string; endTime: string }>; error?: string }> {
   try {
-    const result = await client.listEvents();
+    const result = await client.listEvents(chatId);
     return {
       success: true,
       events: result.records.map((e) => ({
@@ -166,13 +167,35 @@ export async function actionListEvents(
 
 export async function actionCreateEvent(
   client: RingCentralClient,
+  chatId: string,
   title: string,
   startTime: string,
   endTime: string,
+  description?: string,
 ): Promise<{ success: boolean; eventId?: string; error?: string }> {
   try {
-    const event = await client.createEvent({ title, startTime, endTime });
+    const event = await client.createEvent(chatId, { title, startTime, endTime, description });
     return { success: true, eventId: event.id };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+export async function actionGetEvent(
+  client: RingCentralClient,
+  eventId: string,
+): Promise<{ success: boolean; event?: { id: string; title: string; startTime: string; endTime: string }; error?: string }> {
+  try {
+    const event = await client.getEvent(eventId);
+    return {
+      success: true,
+      event: {
+        id: event.id,
+        title: event.title,
+        startTime: event.startTime,
+        endTime: event.endTime,
+      },
+    };
   } catch (err) {
     return { success: false, error: String(err) };
   }
@@ -181,9 +204,12 @@ export async function actionCreateEvent(
 export async function actionUpdateEvent(
   client: RingCentralClient,
   eventId: string,
-  updates: { title?: string; startTime?: string; endTime?: string },
+  updates: { title: string; startTime: string; endTime: string; description?: string },
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    if (!updates.title || !updates.startTime || !updates.endTime) {
+      return { success: false, error: "title, startTime, and endTime are required to update an event" };
+    }
     await client.updateEvent(eventId, updates);
     return { success: true };
   } catch (err) {
