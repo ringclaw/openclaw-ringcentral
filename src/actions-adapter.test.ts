@@ -21,6 +21,7 @@ vi.mock("./actions.js", () => ({
   actionDeleteTask: vi.fn().mockResolvedValue({ success: true }),
   actionListEvents: vi.fn().mockResolvedValue({ success: true, events: [] }),
   actionCreateEvent: vi.fn().mockResolvedValue({ success: true, eventId: "e1" }),
+  actionGetEvent: vi.fn().mockResolvedValue({ success: true, event: { id: "e1" } }),
   actionUpdateEvent: vi.fn().mockResolvedValue({ success: true }),
   actionDeleteEvent: vi.fn().mockResolvedValue({ success: true }),
   actionListNotes: vi.fn().mockResolvedValue({ success: true, notes: [] }),
@@ -44,9 +45,10 @@ describe("getEnabledActions", () => {
     expect(all).toContain("channel-info");
     expect(all).toContain("create-task");
     expect(all).toContain("create-event");
+    expect(all).toContain("get-event");
     expect(all).toContain("create-note");
     expect(all).toContain("confirm-action");
-    expect(all.length).toBe(20);
+    expect(all.length).toBe(21);
   });
 
   it("excludes messages when disabled", () => {
@@ -119,8 +121,13 @@ describe("handleAction", () => {
   });
 
   it("routes create-event", async () => {
-    await handleAction(mockClient, "create-event", { title: "Meet", startTime: "2026-01-01T10:00:00Z", endTime: "2026-01-01T11:00:00Z" });
-    expect(actions.actionCreateEvent).toHaveBeenCalledWith(mockClient, "Meet", "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z");
+    await handleAction(mockClient, "create-event", { chatId: "c1", title: "Meet", startTime: "2026-01-01T10:00:00Z", endTime: "2026-01-01T11:00:00Z" });
+    expect(actions.actionCreateEvent).toHaveBeenCalledWith(mockClient, "c1", "Meet", "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z", undefined);
+  });
+
+  it("routes get-event", async () => {
+    await handleAction(mockClient, "get-event", { eventId: "e1" });
+    expect(actions.actionGetEvent).toHaveBeenCalledWith(mockClient, "e1");
   });
 
   it("routes create-note with body", async () => {

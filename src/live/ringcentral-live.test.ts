@@ -10,7 +10,7 @@ import { createRingCentralHistoryTool } from "../history-tool.js";
 import { RingCentralWebSocketMonitor } from "../monitor.js";
 import { sendMessage } from "../send.js";
 import { extractChatId } from "../targets.js";
-import type { ExtensionInfo, Post } from "../types.js";
+import type { CreateEventRequest, ExtensionInfo, Post } from "../types.js";
 
 const required = readBooleanEnv("RC_E2E_REQUIRED", false);
 const enabled = readBooleanEnv("RC_E2E_ENABLED", false);
@@ -31,6 +31,7 @@ liveDescribe("RingCentral live smoke", () => {
     let ownerClient: RingCentralClient | undefined;
     const createdBotPostIds: string[] = [];
     const createdOwnerPostIds: string[] = [];
+    const createdOwnerEventIds: string[] = [];
 
     try {
       env = readLiveEnv();
@@ -85,6 +86,11 @@ liveDescribe("RingCentral live smoke", () => {
         createdBotPostIds,
         createdOwnerPostIds,
       });
+      await runCalendarEventScenario({
+        env,
+        ownerClient,
+        createdOwnerEventIds,
+      });
     } catch (err) {
       summary.fail(err);
       throw err;
@@ -98,6 +104,11 @@ liveDescribe("RingCentral live smoke", () => {
             ownerClient,
             botPostIds: createdBotPostIds,
             ownerPostIds: createdOwnerPostIds,
+          });
+          await cleanupEvents({
+            cleanup: env.cleanup,
+            ownerClient,
+            eventIds: createdOwnerEventIds,
           });
         }
       } finally {
@@ -386,6 +397,39 @@ async function runThreadedReplyScenario(
   logSafe("owner_read_thread_reply", { owner_read_found: true, thread_metadata: true });
 }
 
+async function runCalendarEventScenario(params: {
+  env: LiveEnv;
+  ownerClient: RingCentralClient;
+  createdOwnerEventIds: string[];
+}): Promise<void> {
+  const eventPayload = buildCalendarEventPayload("calendar-event");
+  const updatedPayload = buildCalendarEventPayload("calendar-event-updated");
+
+  const created = await liveStep("calendar_event_create", () =>
+    params.ownerClient.createEvent(params.env.chatId, eventPayload),
+  );
+  assertLive(!!created.id, "calendar_event_create");
+  const eventId = String(created.id);
+  params.createdOwnerEventIds.push(eventId);
+  logSafe("calendar_event_create", { created: true });
+
+  const listed = await liveStep("calendar_event_list", () =>
+    params.ownerClient.listEvents(params.env.chatId, Math.min(params.env.recordCount, 50)),
+  );
+  assertLive(listed.records.some((event) => event.id === eventId), "calendar_event_list");
+  logSafe("calendar_event_list", { found: true });
+
+  const read = await liveStep("calendar_event_get", () => params.ownerClient.getEvent(eventId));
+  assertLive(read.id === eventId, "calendar_event_get");
+  logSafe("calendar_event_get", { found: true });
+
+  const updated = await liveStep("calendar_event_update", () =>
+    params.ownerClient.updateEvent(eventId, updatedPayload),
+  );
+  assertLive(updated.id === eventId, "calendar_event_update");
+  logSafe("calendar_event_update", { updated: true });
+}
+
 function readLiveEnv(): LiveEnv {
   const missing: string[] = [];
   const readRequired = (name: string) => {
@@ -454,6 +498,18 @@ function buildUniqueText(label: string): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildCalendarEventPayload(label: string): CreateEventRequest {
+  const marker = buildUniqueText(label).split("\n")[0] ?? `[openclaw-ringcentral-e2e:${label}:${Date.now()}]`;
+  const start = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const end = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  return {
+    title: marker,
+    startTime: start,
+    endTime: end,
+    description: buildUniqueText(`${label}-description`),
+  };
 }
 
 async function waitForPost(
@@ -624,6 +680,27 @@ async function cleanupPosts(params: {
     cleanup_bot_post: cleanupBotPost,
     cleanup_owner_post: cleanupOwnerPost,
   });
+}
+
+async function cleanupEvents(params: {
+  cleanup: boolean;
+  ownerClient: RingCentralClient;
+  eventIds: string[];
+}): Promise<void> {
+  if (!params.cleanup) {
+    logSafe("calendar_event_cleanup", { enabled: false });
+    return;
+  }
+
+  let cleanupEvents = true;
+  for (const eventId of params.eventIds.reverse()) {
+    try {
+      await params.ownerClient.deleteEvent(eventId);
+    } catch {
+      cleanupEvents = false;
+    }
+  }
+  logSafe("calendar_event_cleanup", { cleanup_events: cleanupEvents });
 }
 
 async function readHistoryToolText(params: {

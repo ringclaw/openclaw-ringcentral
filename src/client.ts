@@ -296,20 +296,23 @@ export class RingCentralClient {
     });
   }
 
-  async listEvents(): Promise<PaginatedRecords<Event>> {
-    return this.request("GET", "/team-messaging/v1/events?recordCount=50");
+  async listEvents(chatId: string, recordCount = 50): Promise<PaginatedRecords<Event>> {
+    return this.request(
+      "GET",
+      `/team-messaging/v1/groups/${RingCentralClient.encodeId(chatId)}/events?recordCount=${Math.trunc(recordCount)}`,
+    );
   }
 
-  async createEvent(req: CreateEventRequest): Promise<Event> {
-    return this.request("POST", "/team-messaging/v1/events", req);
+  async createEvent(chatId: string, req: CreateEventRequest): Promise<Event> {
+    return this.request("POST", `/team-messaging/v1/groups/${RingCentralClient.encodeId(chatId)}/events`, req);
   }
 
   async getEvent(eventId: string): Promise<Event> {
     return this.request("GET", `/team-messaging/v1/events/${RingCentralClient.encodeId(eventId)}`);
   }
 
-  async updateEvent(eventId: string, updates: Partial<CreateEventRequest>): Promise<Event> {
-    return this.request("PATCH", `/team-messaging/v1/events/${RingCentralClient.encodeId(eventId)}`, updates);
+  async updateEvent(eventId: string, updates: CreateEventRequest): Promise<Event> {
+    return this.request("PUT", `/team-messaging/v1/events/${RingCentralClient.encodeId(eventId)}`, updates);
   }
 
   async deleteEvent(eventId: string): Promise<void> {
