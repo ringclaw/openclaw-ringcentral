@@ -31,6 +31,7 @@ liveDescribe("RingCentral live smoke", () => {
     let ownerClient: RingCentralClient | undefined;
     const createdBotPostIds: string[] = [];
     const createdOwnerPostIds: string[] = [];
+    const createdOwnerNoteIds: string[] = [];
 
     try {
       env = readLiveEnv();
@@ -85,6 +86,13 @@ liveDescribe("RingCentral live smoke", () => {
         createdBotPostIds,
         createdOwnerPostIds,
       });
+      await runNoteScenario({
+        env,
+        botClient,
+        ownerClient,
+        createdBotPostIds,
+        createdOwnerNoteIds,
+      });
     } catch (err) {
       summary.fail(err);
       throw err;
@@ -98,6 +106,11 @@ liveDescribe("RingCentral live smoke", () => {
             ownerClient,
             botPostIds: createdBotPostIds,
             ownerPostIds: createdOwnerPostIds,
+          });
+          await cleanupNotes({
+            cleanup: env.cleanup,
+            ownerClient,
+            noteIds: createdOwnerNoteIds,
           });
         }
       } finally {
@@ -128,6 +141,7 @@ interface LiveClients {
   ownerClient: RingCentralClient;
   createdBotPostIds: string[];
   createdOwnerPostIds?: string[];
+  createdOwnerNoteIds?: string[];
 }
 
 type SummaryDetail = boolean | number | string;
@@ -386,6 +400,41 @@ async function runThreadedReplyScenario(
   logSafe("owner_read_thread_reply", { owner_read_found: true, thread_metadata: true });
 }
 
+async function runNoteScenario(
+  params: LiveClients & {
+    createdOwnerNoteIds: string[];
+  },
+): Promise<void> {
+  const title = buildUniqueText("note-title");
+  const updatedTitle = buildUniqueText("note-title-updated");
+  const body = `<strong>${escapeHtml(title)}</strong>`;
+  const updatedBody = `<strong>${escapeHtml(updatedTitle)}</strong>`;
+
+  const created = await liveStep("note_create", () =>
+    params.ownerClient.createNote(params.env.chatId, { title, body }),
+  );
+  assertLive(!!created.id, "note_create");
+  params.createdOwnerNoteIds.push(created.id);
+  logSafe("note_create", { created: true });
+
+  const read = await liveStep("note_get", () =>
+    params.ownerClient.getNote(created.id),
+  );
+  assertLive(read.id === created.id, "note_get");
+  logSafe("note_get", { found: true });
+
+  const updated = await liveStep("note_update", () =>
+    params.ownerClient.updateNote(created.id, { title: updatedTitle, body: updatedBody }),
+  );
+  assertLive(updated.id === created.id, "note_update");
+  logSafe("note_update", { updated: true });
+
+  await liveStep("note_publish", () =>
+    params.ownerClient.publishNote(created.id),
+  );
+  logSafe("note_publish", { published: true });
+}
+
 function readLiveEnv(): LiveEnv {
   const missing: string[] = [];
   const readRequired = (name: string) => {
@@ -454,6 +503,13 @@ function buildUniqueText(label: string): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 async function waitForPost(
@@ -623,6 +679,29 @@ async function cleanupPosts(params: {
   logSafe("cleanup", {
     cleanup_bot_post: cleanupBotPost,
     cleanup_owner_post: cleanupOwnerPost,
+  });
+}
+
+async function cleanupNotes(params: {
+  cleanup: boolean;
+  ownerClient: RingCentralClient;
+  noteIds: string[];
+}): Promise<void> {
+  if (!params.cleanup) {
+    logSafe("note_cleanup", { enabled: false });
+    return;
+  }
+
+  let cleanupNotes = true;
+  for (const noteId of params.noteIds.reverse()) {
+    try {
+      await params.ownerClient.deleteNote(noteId);
+    } catch {
+      cleanupNotes = false;
+    }
+  }
+  logSafe("note_cleanup", {
+    cleanup_notes: cleanupNotes,
   });
 }
 
