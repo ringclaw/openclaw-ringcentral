@@ -78,6 +78,13 @@ liveDescribe("RingCentral live smoke", () => {
         createdBotPostIds,
         createdOwnerPostIds,
       });
+      await runThreadedReplyScenario({
+        env,
+        botClient,
+        ownerClient,
+        createdBotPostIds,
+        createdOwnerPostIds,
+      });
     } catch (err) {
       summary.fail(err);
       throw err;
@@ -340,6 +347,45 @@ async function runOwnerSendBotReceiveScenario(
   assertLive(String(params.ownerExtension.id ?? ""), "owner_auth");
 }
 
+async function runThreadedReplyScenario(
+  params: LiveClients & {
+    createdOwnerPostIds: string[];
+  },
+): Promise<void> {
+  const rootText = buildUniqueText("owner-thread-root");
+  const replyText = buildUniqueText("bot-thread-reply");
+
+  const root = await liveStep("owner_thread_root_send", () =>
+    params.ownerClient.sendPost(params.env.chatId, rootText),
+  );
+  assertLive(!!root.id, "owner_thread_root_send");
+  const rootId = String(root.id);
+  params.createdOwnerPostIds.push(rootId);
+  logSafe("owner_thread_root_send", { sent: true });
+
+  const reply = await liveStep("bot_thread_reply", () =>
+    sendMessage({
+      client: params.botClient,
+      chatId: params.env.chatId,
+      text: replyText,
+      convertMarkdown: false,
+      replyToId: rootId,
+    }),
+  );
+  assertLive(!!reply?.postId, "bot_thread_reply");
+  params.createdBotPostIds.push(reply!.postId);
+  logSafe("bot_thread_reply", { sent: true });
+
+  const ownerReadReply = await liveStep("owner_read_thread_reply", () =>
+    waitForPost(params.ownerClient, params.env.chatId, replyText, params.env.recordCount),
+  );
+  assertLive(
+    ownerReadReply?.id === reply?.postId && hasThreadMetadata(ownerReadReply, rootId),
+    "owner_read_thread_reply",
+  );
+  logSafe("owner_read_thread_reply", { owner_read_found: true, thread_metadata: true });
+}
+
 function readLiveEnv(): LiveEnv {
   const missing: string[] = [];
   const readRequired = (name: string) => {
@@ -434,6 +480,19 @@ async function findRecentPost(
 ): Promise<Post | undefined> {
   const posts = await readRecentPosts(client, chatId, recordCount);
   return posts.find((post) => post.text?.includes(expectedText));
+}
+
+function hasThreadMetadata(post: Post, rootPostId: string): boolean {
+  const metadata = post as Post & {
+    parentId?: string | number | null;
+    rootPostId?: string | number | null;
+    rootId?: string | number | null;
+  };
+  const parent = metadata.parentPostId ?? metadata.parentId;
+  if (parent && String(parent) === rootPostId) {
+    return true;
+  }
+  return Boolean(metadata.threadId || metadata.rootPostId || metadata.rootId);
 }
 
 async function readRecentPosts(
