@@ -33,6 +33,7 @@ const actionsSchema = z.object({
   tasks: z.boolean().optional(),
   events: z.boolean().optional(),
   notes: z.boolean().optional(),
+  adaptiveCards: z.boolean().optional(),
 });
 
 export const ringCentralConfigSchema = z.object({

@@ -28,6 +28,10 @@ vi.mock("./actions.js", () => ({
   actionUpdateNote: vi.fn().mockResolvedValue({ success: true }),
   actionDeleteNote: vi.fn().mockResolvedValue({ success: true }),
   actionPublishNote: vi.fn().mockResolvedValue({ success: true }),
+  actionCreateAdaptiveCard: vi.fn().mockResolvedValue({ success: true, cardId: "ac1" }),
+  actionGetAdaptiveCard: vi.fn().mockResolvedValue({ success: true, card: { id: "ac1", type: "AdaptiveCard" } }),
+  actionUpdateAdaptiveCard: vi.fn().mockResolvedValue({ success: true }),
+  actionDeleteAdaptiveCard: vi.fn().mockResolvedValue({ success: true }),
 }));
 
 const mockClient = {} as any;
@@ -45,8 +49,9 @@ describe("getEnabledActions", () => {
     expect(all).toContain("create-task");
     expect(all).toContain("create-event");
     expect(all).toContain("create-note");
+    expect(all).toContain("create-adaptive-card");
     expect(all).toContain("confirm-action");
-    expect(all.length).toBe(20);
+    expect(all.length).toBe(24);
   });
 
   it("excludes messages when disabled", () => {
@@ -74,6 +79,12 @@ describe("getEnabledActions", () => {
     const result = getEnabledActions({ notes: false });
     expect(result).not.toContain("create-note");
     expect(result).not.toContain("publish-note");
+  });
+
+  it("excludes adaptive cards when disabled", () => {
+    const result = getEnabledActions({ adaptiveCards: false });
+    expect(result).not.toContain("create-adaptive-card");
+    expect(result).not.toContain("delete-adaptive-card");
   });
 
   it("excludes channelInfo when disabled", () => {
@@ -133,6 +144,29 @@ describe("handleAction", () => {
     expect(actions.actionPublishNote).toHaveBeenCalledWith(mockClient, "n1");
   });
 
+  it("routes create-adaptive-card with full card payload", async () => {
+    const card = { type: "AdaptiveCard", version: "1.3", body: [] };
+    await handleAction(mockClient, "create-adaptive-card", { chatId: "c1", card });
+    expect(actions.actionCreateAdaptiveCard).toHaveBeenCalledWith(mockClient, "c1", card);
+  });
+
+  it("routes create-adaptive-card from text", async () => {
+    await handleAction(mockClient, "create-adaptive-card", { chatId: "c1", text: "hello card" });
+    expect(actions.actionCreateAdaptiveCard).toHaveBeenCalledWith(
+      mockClient,
+      "c1",
+      expect.objectContaining({
+        type: "AdaptiveCard",
+        body: [expect.objectContaining({ text: "hello card" })],
+      }),
+    );
+  });
+
+  it("routes get-adaptive-card", async () => {
+    await handleAction(mockClient, "get-adaptive-card", { cardId: "ac1" });
+    expect(actions.actionGetAdaptiveCard).toHaveBeenCalledWith(mockClient, "ac1");
+  });
+
   it("supports param aliases (chat_id, post_id, messageId)", async () => {
     await handleAction(mockClient, "send-message", { chat_id: "c2", message: "yo" });
     expect(actions.actionSendMessage).toHaveBeenCalledWith(mockClient, "c2", "yo");
@@ -163,6 +197,10 @@ describe("handleAction", () => {
     result = await handleAction(mockClient, "delete-note", { id: "n99" });
     await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionDeleteNote).toHaveBeenCalledWith(mockClient, "n99");
+
+    result = await handleAction(mockClient, "delete-adaptive-card", { id: "ac99" });
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
+    expect(actions.actionDeleteAdaptiveCard).toHaveBeenCalledWith(mockClient, "ac99");
   });
 
   it("returns error for unknown action", async () => {
@@ -263,6 +301,11 @@ describe("handleAction", () => {
 
     it("requires confirmation for update-event", async () => {
       const result = await handleAction(mockClient, "update-event", { eventId: "e1", title: "new" }) as any;
+      expect(result.requiresConfirmation).toBe(true);
+    });
+
+    it("requires confirmation for update-adaptive-card", async () => {
+      const result = await handleAction(mockClient, "update-adaptive-card", { cardId: "ac1", text: "new" }) as any;
       expect(result.requiresConfirmation).toBe(true);
     });
   });
