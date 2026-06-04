@@ -2,7 +2,7 @@
 // Used by actions-adapter.ts to handle OpenClaw agent tool calls.
 
 import type { RingCentralClient } from "./client.js";
-import type { CreateNoteRequest } from "./types.js";
+import type { CreateAdaptiveCardRequest, CreateNoteRequest } from "./types.js";
 
 export async function actionSendMessage(
   client: RingCentralClient,
@@ -282,6 +282,56 @@ export async function actionPublishNote(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     await client.publishNote(noteId);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+export async function actionCreateAdaptiveCard(
+  client: RingCentralClient,
+  chatId: string,
+  card: CreateAdaptiveCardRequest,
+): Promise<{ success: boolean; cardId?: string; error?: string }> {
+  try {
+    const created = await client.createAdaptiveCard(chatId, card);
+    return { success: true, cardId: created.id };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+export async function actionGetAdaptiveCard(
+  client: RingCentralClient,
+  cardId: string,
+): Promise<{ success: boolean; card?: { id: string; type: string }; error?: string }> {
+  try {
+    const card = await client.getAdaptiveCard(cardId);
+    return { success: true, card: { id: card.id, type: card.type } };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+export async function actionUpdateAdaptiveCard(
+  client: RingCentralClient,
+  cardId: string,
+  card: CreateAdaptiveCardRequest,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await client.updateAdaptiveCard(cardId, card);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+export async function actionDeleteAdaptiveCard(
+  client: RingCentralClient,
+  cardId: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await client.deleteAdaptiveCard(cardId);
     return { success: true };
   } catch (err) {
     return { success: false, error: String(err) };

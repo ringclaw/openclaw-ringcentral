@@ -79,7 +79,8 @@
     "actions.channelInfo": { "label": "Channel Info" },
     "actions.tasks": { "label": "Tasks" },
     "actions.events": { "label": "Events" },
-    "actions.notes": { "label": "Notes" }
+    "actions.notes": { "label": "Notes" },
+    "actions.adaptiveCards": { "label": "Adaptive Cards" }
   },
   "configSchema": {
     "type": "object",
@@ -165,7 +166,8 @@
           "channelInfo": { "type": "boolean" },
           "tasks": { "type": "boolean" },
           "events": { "type": "boolean" },
-          "notes": { "type": "boolean" }
+          "notes": { "type": "boolean" },
+          "adaptiveCards": { "type": "boolean" }
         }
       }
     }

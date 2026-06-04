@@ -282,6 +282,33 @@ describe("RingCentralClient", () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: "ac1", type: "AdaptiveCard" }));
       const card = await client.createAdaptiveCard("c1", { type: "AdaptiveCard", body: [], version: "1.3" });
       expect(card.id).toBe("ac1");
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/team-messaging/v1/chats/c1/adaptive-cards",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    it("get/update/delete AdaptiveCard", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "ac1", type: "AdaptiveCard" }));
+      await expect(client.getAdaptiveCard("ac1")).resolves.toMatchObject({ id: "ac1" });
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        "https://api.example.com/team-messaging/v1/adaptive-cards/ac1",
+        expect.objectContaining({ method: "GET" }),
+      );
+
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "ac1", type: "AdaptiveCard" }));
+      await client.updateAdaptiveCard("ac1", { type: "AdaptiveCard", body: [], version: "1.3" });
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        "https://api.example.com/team-messaging/v1/adaptive-cards/ac1",
+        expect.objectContaining({ method: "PUT" }),
+      );
+
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 204, text: () => Promise.resolve("") });
+      await expect(client.deleteAdaptiveCard("ac1")).resolves.toBeUndefined();
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        "https://api.example.com/team-messaging/v1/adaptive-cards/ac1",
+        expect.objectContaining({ method: "DELETE" }),
+      );
     });
   });
 });
