@@ -10,6 +10,7 @@ import type {
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { getRcConfig, hasOwnerCredentials, isAccountConfigured, resolveAccount } from "./accounts.js";
 import { ringCentralMessageActions } from "./actions-adapter.js";
+import { createRingCentralArtifactTools } from "./artifact-tools.js";
 import { createBotClient, createOwnerClient, type RingCentralClient } from "./client.js";
 import { ringCentralConfigSchema } from "./config-schema.js";
 import { createRingCentralHistoryTool } from "./history-tool.js";
@@ -337,7 +338,10 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
   },
 
   actions: ringCentralMessageActions,
-  agentTools: ({ cfg }) => [createRingCentralHistoryTool(cfg)],
+  agentTools: ({ cfg }) => [
+    createRingCentralHistoryTool(cfg),
+    ...createRingCentralArtifactTools(cfg),
+  ],
 };
 
 function createOwnerClientFromAccount(account: ResolvedAccount): RingCentralClient | undefined {

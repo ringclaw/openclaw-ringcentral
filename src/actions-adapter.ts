@@ -8,8 +8,8 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { RingCentralClient } from "./client.js";
 import type { CreateAdaptiveCardRequest } from "./types.js";
-import { createBotClient, createOwnerClient } from "./client.js";
-import { getRcConfig, hasOwnerCredentials, isAccountConfigured, resolveAccount } from "./accounts.js";
+import { createBotClient } from "./client.js";
+import { getRcConfig, isAccountConfigured, resolveAccount } from "./accounts.js";
 import * as actions from "./actions.js";
 import { extractChatId } from "./targets.js";
 
@@ -63,6 +63,7 @@ const pendingActions = new Map<string, PendingAction>();
 
 export const __testing = {
   pendingActions,
+  createActionClient,
 };
 
 function cleanExpiredPendingActions(): void {
@@ -206,14 +207,6 @@ function readAdaptiveCardPayload(params: Record<string, unknown>): CreateAdaptiv
 function createActionClient(cfg: unknown): RingCentralClient {
   const rcCfg = getRcConfig(cfg);
   const account = resolveAccount(rcCfg);
-  if (hasOwnerCredentials(account)) {
-    return createOwnerClient(
-      account.server,
-      account.ownerCredentials!.clientId,
-      account.ownerCredentials!.clientSecret,
-      account.ownerCredentials!.jwt,
-    );
-  }
   return createBotClient(account.server, account.botToken);
 }
 
