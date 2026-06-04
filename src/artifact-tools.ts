@@ -301,33 +301,39 @@ function updateNoteTool(cfg?: unknown): ChannelAgentTool {
 }
 
 function deleteNoteTool(cfg?: unknown): ChannelAgentTool {
-  return {
+  return noteIdWriteTool({
+    cfg,
     name: "ringcentral_delete_note",
     label: "Delete RingCentral Note",
     description: "Delete a RingCentral note. Non-Home chat writes require Home DM confirmation.",
-    parameters: Type.Object({
-      chat_id: Type.Optional(Type.String()),
-      note_id: Type.String(),
-    }),
-    execute: async (_toolCallId, rawParams) => {
-      const params = rawParams as Record<string, unknown>;
-      const noteId = readString(params.note_id);
-      if (!noteId) return errorResult("note_id is required.");
-      return runOwnerWriteTool(
-        cfg,
-        params,
-        { kind: "delete-note", chatId: "", noteId },
-        `delete note ${noteId}`,
-      );
-    },
-  };
+    kind: "delete-note",
+    summaryVerb: "delete",
+  });
 }
 
 function publishNoteTool(cfg?: unknown): ChannelAgentTool {
-  return {
+  return noteIdWriteTool({
+    cfg,
     name: "ringcentral_publish_note",
     label: "Publish RingCentral Note",
     description: "Publish a RingCentral note. Non-Home chat writes require Home DM confirmation.",
+    kind: "publish-note",
+    summaryVerb: "publish",
+  });
+}
+
+function noteIdWriteTool(options: {
+  cfg?: unknown;
+  name: string;
+  label: string;
+  description: string;
+  kind: "delete-note" | "publish-note";
+  summaryVerb: string;
+}): ChannelAgentTool {
+  return {
+    name: options.name,
+    label: options.label,
+    description: options.description,
     parameters: Type.Object({
       chat_id: Type.Optional(Type.String()),
       note_id: Type.String(),
@@ -337,10 +343,10 @@ function publishNoteTool(cfg?: unknown): ChannelAgentTool {
       const noteId = readString(params.note_id);
       if (!noteId) return errorResult("note_id is required.");
       return runOwnerWriteTool(
-        cfg,
+        options.cfg,
         params,
-        { kind: "publish-note", chatId: "", noteId },
-        `publish note ${noteId}`,
+        { kind: options.kind, chatId: "", noteId },
+        `${options.summaryVerb} note ${noteId}`,
       );
     },
   };
