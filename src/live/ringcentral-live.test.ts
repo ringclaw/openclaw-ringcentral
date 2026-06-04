@@ -10,7 +10,7 @@ import { createRingCentralHistoryTool } from "../history-tool.js";
 import { RingCentralWebSocketMonitor } from "../monitor.js";
 import { sendMessage } from "../send.js";
 import { extractChatId } from "../targets.js";
-import type { CreateEventRequest, ExtensionInfo, Post } from "../types.js";
+import type { CreateAdaptiveCardRequest, CreateEventRequest, ExtensionInfo, Post } from "../types.js";
 
 const required = readBooleanEnv("RC_E2E_REQUIRED", false);
 const enabled = readBooleanEnv("RC_E2E_ENABLED", false);
@@ -32,6 +32,8 @@ liveDescribe("RingCentral live smoke", () => {
     const createdBotPostIds: string[] = [];
     const createdOwnerPostIds: string[] = [];
     const createdOwnerEventIds: string[] = [];
+    const createdOwnerNoteIds: string[] = [];
+    const createdBotAdaptiveCardIds: string[] = [];
 
     try {
       env = readLiveEnv();
@@ -91,6 +93,20 @@ liveDescribe("RingCentral live smoke", () => {
         ownerClient,
         createdOwnerEventIds,
       });
+      await runAdaptiveCardScenario({
+        env,
+        botClient,
+        ownerClient,
+        createdBotPostIds,
+        createdBotAdaptiveCardIds,
+      });
+      await runNoteScenario({
+        env,
+        botClient,
+        ownerClient,
+        createdBotPostIds,
+        createdOwnerNoteIds,
+      });
     } catch (err) {
       summary.fail(err);
       throw err;
@@ -109,6 +125,16 @@ liveDescribe("RingCentral live smoke", () => {
             cleanup: env.cleanup,
             ownerClient,
             eventIds: createdOwnerEventIds,
+          });
+          await cleanupAdaptiveCards({
+            cleanup: env.cleanup,
+            botClient,
+            adaptiveCardIds: createdBotAdaptiveCardIds,
+          });
+          await cleanupNotes({
+            cleanup: env.cleanup,
+            ownerClient,
+            noteIds: createdOwnerNoteIds,
           });
         }
       } finally {
@@ -139,6 +165,8 @@ interface LiveClients {
   ownerClient: RingCentralClient;
   createdBotPostIds: string[];
   createdOwnerPostIds?: string[];
+  createdOwnerNoteIds?: string[];
+  createdBotAdaptiveCardIds?: string[];
 }
 
 type SummaryDetail = boolean | number | string;
@@ -430,6 +458,70 @@ async function runCalendarEventScenario(params: {
   logSafe("calendar_event_update", { updated: true });
 }
 
+async function runNoteScenario(
+  params: LiveClients & {
+    createdOwnerNoteIds: string[];
+  },
+): Promise<void> {
+  const title = buildUniqueText("note-title");
+  const updatedTitle = buildUniqueText("note-title-updated");
+  const body = `<strong>${escapeHtml(title)}</strong>`;
+  const updatedBody = `<strong>${escapeHtml(updatedTitle)}</strong>`;
+
+  const created = await liveStep("note_create", () =>
+    params.ownerClient.createNote(params.env.chatId, { title, body }),
+  );
+  assertLive(!!created.id, "note_create");
+  params.createdOwnerNoteIds.push(created.id);
+  logSafe("note_create", { created: true });
+
+  const read = await liveStep("note_get", () =>
+    params.ownerClient.getNote(created.id),
+  );
+  assertLive(read.id === created.id, "note_get");
+  logSafe("note_get", { found: true });
+
+  const updated = await liveStep("note_update", () =>
+    params.ownerClient.updateNote(created.id, { title: updatedTitle, body: updatedBody }),
+  );
+  assertLive(updated.id === created.id, "note_update");
+  logSafe("note_update", { updated: true });
+
+  await liveStep("note_publish", () =>
+    params.ownerClient.publishNote(created.id),
+  );
+  logSafe("note_publish", { published: true });
+}
+
+async function runAdaptiveCardScenario(
+  params: LiveClients & {
+    createdBotAdaptiveCardIds: string[];
+  },
+): Promise<void> {
+  const initialText = buildUniqueText("adaptive-card");
+  const updatedText = buildUniqueText("adaptive-card-updated");
+  const card = buildAdaptiveCard(initialText);
+
+  const created = await liveStep("adaptive_card_create", () =>
+    params.botClient.createAdaptiveCard(params.env.chatId, card),
+  );
+  assertLive(!!created.id, "adaptive_card_create");
+  params.createdBotAdaptiveCardIds.push(created.id);
+  logSafe("adaptive_card_create", { created: true });
+
+  const read = await liveStep("adaptive_card_get", () =>
+    params.botClient.getAdaptiveCard(created.id),
+  );
+  assertLive(read.id === created.id, "adaptive_card_get");
+  logSafe("adaptive_card_get", { found: true });
+
+  const updated = await liveStep("adaptive_card_update", () =>
+    params.botClient.updateAdaptiveCard(created.id, buildAdaptiveCard(updatedText)),
+  );
+  assertLive(updated.id === created.id, "adaptive_card_update");
+  logSafe("adaptive_card_update", { updated: true });
+}
+
 function readLiveEnv(): LiveEnv {
   const missing: string[] = [];
   const readRequired = (name: string) => {
@@ -509,6 +601,22 @@ function buildCalendarEventPayload(label: string): CreateEventRequest {
     startTime: start,
     endTime: end,
     description: buildUniqueText(`${label}-description`),
+  };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function buildAdaptiveCard(text: string): CreateAdaptiveCardRequest {
+  return {
+    type: "AdaptiveCard",
+    $schema: "https://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.3",
+    body: [{ type: "TextBlock", text, wrap: true }],
   };
 }
 
@@ -701,6 +809,52 @@ async function cleanupEvents(params: {
     }
   }
   logSafe("calendar_event_cleanup", { cleanup_events: cleanupEvents });
+}
+
+async function cleanupNotes(params: {
+  cleanup: boolean;
+  ownerClient: RingCentralClient;
+  noteIds: string[];
+}): Promise<void> {
+  if (!params.cleanup) {
+    logSafe("note_cleanup", { enabled: false });
+    return;
+  }
+
+  let cleanupNotes = true;
+  for (const noteId of params.noteIds.reverse()) {
+    try {
+      await params.ownerClient.deleteNote(noteId);
+    } catch {
+      cleanupNotes = false;
+    }
+  }
+  logSafe("note_cleanup", {
+    cleanup_notes: cleanupNotes,
+  });
+}
+
+async function cleanupAdaptiveCards(params: {
+  cleanup: boolean;
+  botClient: RingCentralClient;
+  adaptiveCardIds: string[];
+}): Promise<void> {
+  if (!params.cleanup) {
+    logSafe("adaptive_card_cleanup", { enabled: false });
+    return;
+  }
+
+  let cleanupAdaptiveCards = true;
+  for (const cardId of params.adaptiveCardIds.reverse()) {
+    try {
+      await params.botClient.deleteAdaptiveCard(cardId);
+    } catch {
+      cleanupAdaptiveCards = false;
+    }
+  }
+  logSafe("adaptive_card_cleanup", {
+    cleanup_adaptive_cards: cleanupAdaptiveCards,
+  });
 }
 
 async function readHistoryToolText(params: {

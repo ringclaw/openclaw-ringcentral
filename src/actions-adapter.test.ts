@@ -26,9 +26,14 @@ vi.mock("./actions.js", () => ({
   actionDeleteEvent: vi.fn().mockResolvedValue({ success: true }),
   actionListNotes: vi.fn().mockResolvedValue({ success: true, notes: [] }),
   actionCreateNote: vi.fn().mockResolvedValue({ success: true, noteId: "n1" }),
+  actionGetNote: vi.fn().mockResolvedValue({ success: true, note: { id: "n1", title: "Note" } }),
   actionUpdateNote: vi.fn().mockResolvedValue({ success: true }),
   actionDeleteNote: vi.fn().mockResolvedValue({ success: true }),
   actionPublishNote: vi.fn().mockResolvedValue({ success: true }),
+  actionCreateAdaptiveCard: vi.fn().mockResolvedValue({ success: true, cardId: "ac1" }),
+  actionGetAdaptiveCard: vi.fn().mockResolvedValue({ success: true, card: { id: "ac1", type: "AdaptiveCard" } }),
+  actionUpdateAdaptiveCard: vi.fn().mockResolvedValue({ success: true }),
+  actionDeleteAdaptiveCard: vi.fn().mockResolvedValue({ success: true }),
 }));
 
 const mockClient = {} as any;
@@ -47,8 +52,10 @@ describe("getEnabledActions", () => {
     expect(all).toContain("create-event");
     expect(all).toContain("get-event");
     expect(all).toContain("create-note");
+    expect(all).toContain("get-note");
+    expect(all).toContain("create-adaptive-card");
     expect(all).toContain("confirm-action");
-    expect(all.length).toBe(21);
+    expect(all.length).toBe(26);
   });
 
   it("excludes messages when disabled", () => {
@@ -75,7 +82,14 @@ describe("getEnabledActions", () => {
   it("excludes notes when disabled", () => {
     const result = getEnabledActions({ notes: false });
     expect(result).not.toContain("create-note");
+    expect(result).not.toContain("get-note");
     expect(result).not.toContain("publish-note");
+  });
+
+  it("excludes adaptive cards when disabled", () => {
+    const result = getEnabledActions({ adaptiveCards: false });
+    expect(result).not.toContain("create-adaptive-card");
+    expect(result).not.toContain("delete-adaptive-card");
   });
 
   it("excludes channelInfo when disabled", () => {
@@ -132,12 +146,45 @@ describe("handleAction", () => {
 
   it("routes create-note with body", async () => {
     await handleAction(mockClient, "create-note", { chatId: "c1", title: "Note", body: "content" });
-    expect(actions.actionCreateNote).toHaveBeenCalledWith(mockClient, "c1", "Note", "content");
+    expect(actions.actionCreateNote).toHaveBeenCalledWith(mockClient, "c1", "Note", "content", false);
+  });
+
+  it("routes create-note with explicit publish", async () => {
+    await handleAction(mockClient, "create-note", { chatId: "c1", title: "Note", publish: true });
+    expect(actions.actionCreateNote).toHaveBeenCalledWith(mockClient, "c1", "Note", undefined, true);
+  });
+
+  it("routes get-note", async () => {
+    await handleAction(mockClient, "get-note", { noteId: "n1" });
+    expect(actions.actionGetNote).toHaveBeenCalledWith(mockClient, "n1");
   });
 
   it("routes publish-note", async () => {
     await handleAction(mockClient, "publish-note", { noteId: "n1" });
     expect(actions.actionPublishNote).toHaveBeenCalledWith(mockClient, "n1");
+  });
+
+  it("routes create-adaptive-card with full card payload", async () => {
+    const card = { type: "AdaptiveCard", version: "1.3", body: [] };
+    await handleAction(mockClient, "create-adaptive-card", { chatId: "c1", card });
+    expect(actions.actionCreateAdaptiveCard).toHaveBeenCalledWith(mockClient, "c1", card);
+  });
+
+  it("routes create-adaptive-card from text", async () => {
+    await handleAction(mockClient, "create-adaptive-card", { chatId: "c1", text: "hello card" });
+    expect(actions.actionCreateAdaptiveCard).toHaveBeenCalledWith(
+      mockClient,
+      "c1",
+      expect.objectContaining({
+        type: "AdaptiveCard",
+        body: [expect.objectContaining({ text: "hello card" })],
+      }),
+    );
+  });
+
+  it("routes get-adaptive-card", async () => {
+    await handleAction(mockClient, "get-adaptive-card", { cardId: "ac1" });
+    expect(actions.actionGetAdaptiveCard).toHaveBeenCalledWith(mockClient, "ac1");
   });
 
   it("supports param aliases (chat_id, post_id, messageId)", async () => {
@@ -170,6 +217,10 @@ describe("handleAction", () => {
     result = await handleAction(mockClient, "delete-note", { id: "n99" });
     await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
     expect(actions.actionDeleteNote).toHaveBeenCalledWith(mockClient, "n99");
+
+    result = await handleAction(mockClient, "delete-adaptive-card", { id: "ac99" });
+    await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
+    expect(actions.actionDeleteAdaptiveCard).toHaveBeenCalledWith(mockClient, "ac99");
   });
 
   it("returns error for unknown action", async () => {
@@ -205,6 +256,20 @@ describe("handleAction", () => {
     it("allows action when no sessionChatId is provided", async () => {
       await handleAction(mockClient, "send-message", { chatId: "any-chat", text: "hi" });
       expect(actions.actionSendMessage).toHaveBeenCalledWith(mockClient, "any-chat", "hi");
+    });
+
+    it("blocks scoped note actions when chatId differs from sessionChatId", async () => {
+      const result = await handleAction(
+        mockClient,
+        "publish-note",
+        { chatId: "evil-chat", noteId: "n1" },
+        "session-chat",
+      );
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining("Action scope violation"),
+      });
+      expect(actions.actionPublishNote).not.toHaveBeenCalled();
     });
 
     it("allows non-chat-scoped actions with different chatId", async () => {
@@ -270,6 +335,21 @@ describe("handleAction", () => {
 
     it("requires confirmation for update-event", async () => {
       const result = await handleAction(mockClient, "update-event", { eventId: "e1", title: "new" }) as any;
+      expect(result.requiresConfirmation).toBe(true);
+    });
+
+    it("requires confirmation for update-note and preserves body updates", async () => {
+      const result = await handleAction(mockClient, "update-note", { noteId: "n1", title: "new", body: "body" }) as any;
+      expect(result.requiresConfirmation).toBe(true);
+      await handleAction(mockClient, "confirm-action", { nonce: result.confirmationId });
+      expect(actions.actionUpdateNote).toHaveBeenCalledWith(mockClient, "n1", {
+        title: "new",
+        body: "body",
+      });
+    });
+
+    it("requires confirmation for update-adaptive-card", async () => {
+      const result = await handleAction(mockClient, "update-adaptive-card", { cardId: "ac1", text: "new" }) as any;
       expect(result.requiresConfirmation).toBe(true);
     });
   });
