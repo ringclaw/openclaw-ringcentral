@@ -451,10 +451,11 @@ async function runCalendarEventScenario(params: {
   assertLive(read.id === eventId, "calendar_event_get");
   logSafe("calendar_event_get", { found: true });
 
-  const updated = await liveStep("calendar_event_update", () =>
-    params.ownerClient.updateEvent(eventId, updatedPayload),
-  );
-  assertLive(updated.id === eventId, "calendar_event_update");
+  const updated = await liveStep("calendar_event_update", async () => {
+    const response = await params.ownerClient.updateEvent(eventId, updatedPayload);
+    return response.title === updatedPayload.title ? response : params.ownerClient.getEvent(eventId);
+  });
+  assertLive(updated.id === eventId && updated.title === updatedPayload.title, "calendar_event_update");
   logSafe("calendar_event_update", { updated: true });
 }
 
