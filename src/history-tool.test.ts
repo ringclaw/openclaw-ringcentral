@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRingCentralHistoryTool } from "./history-tool.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
+const origEnv = { ...process.env };
 
 function jsonResponse(data: unknown, status = 200) {
   return {
@@ -15,7 +16,16 @@ function jsonResponse(data: unknown, status = 200) {
 }
 
 beforeEach(() => {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("RC_") || key.startsWith("RINGCENTRAL_")) {
+      delete process.env[key];
+    }
+  }
   mockFetch.mockReset();
+});
+
+afterEach(() => {
+  process.env = { ...origEnv };
 });
 
 describe("ringcentral_get_recent_messages", () => {

@@ -1,5 +1,7 @@
 // RingCentral REST API client. Supports bot static tokens and owner JWT credentials.
 
+import { detectMime, mimeTypeFromFilePath, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/media-runtime";
 import type {
   AdaptiveCard,
   Chat,
@@ -31,6 +33,20 @@ export interface ClientOptions {
 export interface SendPostOptions {
   parentPostId?: string | number | null;
   threadId?: string | number | null;
+}
+
+export interface DownloadAttachmentOptions {
+  uri: string;
+  fileName?: string;
+  contentType?: string;
+  maxBytes: number;
+}
+
+export interface DownloadedAttachment {
+  buffer: Buffer;
+  contentType: string;
+  fileName: string;
+  size: number;
 }
 
 type RequestBody = object | string | Uint8Array;
@@ -177,6 +193,51 @@ export class RingCentralClient {
     }
 
     throw new Error(`RingCentral API retry budget exhausted for ${method} ${path}`);
+  }
+
+  async downloadAttachment(opts: DownloadAttachmentOptions): Promise<DownloadedAttachment> {
+    const uri = opts.uri.trim();
+    if (!/^https?:\/\//i.test(uri)) {
+      throw new Error("RingCentral attachment URI must be HTTP(S)");
+    }
+    const token = await this.getToken();
+    const headers = {
+      Authorization: `Bearer ${token}`,
+    };
+
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      const resp = await fetch(uri, { method: "GET", headers });
+      this.lastStatus = resp.status;
+      if (resp.status === 429 && attempt < this.maxRetries) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, RingCentralClient.parseRetryAfter(resp.headers.get("Retry-After"))),
+        );
+        continue;
+      }
+      if (!resp.ok) {
+        throw new RingCentralApiError(resp.status, await resp.text(), "RingCentral attachment download failed");
+      }
+      const buffer = await readResponseWithLimit(resp, opts.maxBytes, {
+        chunkTimeoutMs: 30_000,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`RingCentral attachment too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+      });
+      const fileName = normalizeAttachmentFileName(opts.fileName);
+      const contentType =
+        normalizeMimeType(opts.contentType) ??
+        normalizeMimeType(resp.headers.get("Content-Type")) ??
+        (await detectMime({ buffer, filePath: fileName })) ??
+        mimeTypeFromFilePath(fileName) ??
+        "application/octet-stream";
+      return {
+        buffer,
+        contentType,
+        fileName,
+        size: buffer.byteLength,
+      };
+    }
+
+    throw new Error("RingCentral attachment retry budget exhausted");
   }
 
   async createWebSocketToken(): Promise<WSTokenResponse> {
@@ -358,6 +419,14 @@ export class RingCentralClient {
   async deleteAdaptiveCard(cardId: string): Promise<void> {
     await this.request("DELETE", `/team-messaging/v1/adaptive-cards/${RingCentralClient.encodeId(cardId)}`);
   }
+}
+
+function normalizeAttachmentFileName(value: string | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "attachment";
+  }
+  return trimmed.replace(/[\0\r\n]+/g, " ").trim() || "attachment";
 }
 
 export function createBotClient(serverUrl: string, botToken: string): RingCentralClient {

@@ -1,8 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAccount } from "./accounts.js";
 import { handleInboundPost, stripRcMentions } from "./inbound.js";
 import { ThreadParticipationTracker } from "./threading.js";
 import type { Post } from "./types.js";
+
+const saveMediaBufferMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  saveMediaBuffer: saveMediaBufferMock,
+  buildAgentMediaPayload: (mediaList: Array<{ path: string; contentType?: string | null }>) => ({
+    MediaPath: mediaList[0]?.path,
+    MediaUrl: mediaList[0]?.path,
+    MediaType: mediaList[0]?.contentType ?? undefined,
+    MediaPaths: mediaList.map((media) => media.path),
+    MediaUrls: mediaList.map((media) => media.path),
+    MediaTypes: mediaList.map((media) => media.contentType ?? ""),
+  }),
+}));
 
 function makePost(overrides: Partial<Post> = {}): Post {
   return {
@@ -24,6 +38,12 @@ function makeClient(chatType = "Group", email = "user@example.com") {
     sendPost: vi.fn().mockResolvedValue({ id: "sent-1" }),
     updatePost: vi.fn(),
     deletePost: vi.fn(),
+    downloadAttachment: vi.fn().mockResolvedValue({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+      fileName: "image.png",
+      size: 5,
+    }),
   } as any;
 }
 
@@ -65,6 +85,16 @@ describe("stripRcMentions", () => {
 });
 
 describe("handleInboundPost", () => {
+  beforeEach(() => {
+    saveMediaBufferMock.mockReset();
+    saveMediaBufferMock.mockResolvedValue({
+      id: "image---saved.png",
+      path: "/tmp/openclaw/media/inbound/image---saved.png",
+      contentType: "image/png",
+      size: 5,
+    });
+  });
+
   it("dispatches allowed group messages through OpenClaw runtime", async () => {
     const runtime = makeRuntime();
     await handleInboundPost({
@@ -89,10 +119,15 @@ describe("handleInboundPost", () => {
 
   it("drops groups when groupPolicy is disabled", async () => {
     const runtime = makeRuntime();
+    const client = makeClient();
     await handleInboundPost({
-      post: makePost(),
+      post: makePost({
+        attachments: [
+          { id: "a1", type: "File", contentUri: "https://content.example.test/a.png" },
+        ],
+      }),
       cfg: {},
-      botClient: makeClient(),
+      botClient: client,
       account: resolveAccount({ botToken: "bot", groupPolicy: "disabled" }),
       botPersonId: "bot",
       channelRuntime: runtime,
@@ -100,6 +135,8 @@ describe("handleInboundPost", () => {
       log: vi.fn(),
     });
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(client.downloadAttachment).not.toHaveBeenCalled();
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
   it("allows DM senders by email alias", async () => {
@@ -119,5 +156,55 @@ describe("handleInboundPost", () => {
       tracker: new ThreadParticipationTracker(),
     });
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("downloads admitted attachments into OpenClaw inbound media payload", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    await handleInboundPost({
+      post: makePost({
+        attachments: [
+          {
+            id: "a1",
+            type: "File",
+            contentUri: "https://content.example.test/a.png",
+            name: "image.png",
+            contentType: "image/png",
+          },
+        ],
+      }),
+      cfg: {},
+      botClient: client,
+      account: resolveAccount({
+        botToken: "bot",
+        groupPolicy: "open",
+        requireMention: false,
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+    });
+
+    expect(client.downloadAttachment).toHaveBeenCalledWith({
+      uri: "https://content.example.test/a.png",
+      fileName: "image.png",
+      contentType: "image/png",
+      maxBytes: 5 * 1024 * 1024,
+    });
+    expect(saveMediaBufferMock).toHaveBeenCalledWith(
+      Buffer.from("image"),
+      "image/png",
+      "inbound",
+      5 * 1024 * 1024,
+      "image.png",
+    );
+    expect(runtime.reply.finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MediaPath: "/tmp/openclaw/media/inbound/image---saved.png",
+        MediaType: "image/png",
+        MediaPaths: ["/tmp/openclaw/media/inbound/image---saved.png"],
+      }),
+    );
   });
 });

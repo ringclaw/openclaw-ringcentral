@@ -103,6 +103,14 @@
     "noThreadChannels": { "label": "No-thread Channels", "advanced": true },
     "replyToMode": { "label": "Reply-to Mode", "advanced": true },
     "processingPlaceholder": { "label": "Processing Placeholder", "advanced": true },
+    "attachments": {
+      "label": "Inbound Attachments",
+      "help": "Download admitted RingCentral file/image attachments into OpenClaw inbound media storage.",
+      "advanced": true
+    },
+    "attachments.enabled": { "label": "Download Attachments", "advanced": true },
+    "attachments.maxCount": { "label": "Max Attachments Per Message", "advanced": true },
+    "attachments.maxBytes": { "label": "Max Attachment Bytes", "advanced": true },
     "historyMessageLimit": { "label": "History Message Limit", "advanced": true },
     "homeChannel": { "label": "Home Channel", "advanced": true },
     "homeChannelName": { "label": "Home Channel Name", "advanced": true },
@@ -193,6 +201,15 @@
           "initialText": { "type": "string" },
           "delayedText": { "type": "string" },
           "editDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 60 }
+        }
+      },
+      "attachments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "maxCount": { "type": "integer", "minimum": 0, "maximum": 20 },
+          "maxBytes": { "type": "integer", "minimum": 1, "maximum": 104857600 }
         }
       },
       "historyMessageLimit": { "type": "integer", "minimum": 1, "maximum": 1000 },

@@ -12,6 +12,10 @@ import type {
 export const DEFAULT_SERVER = "https://platform.ringcentral.com";
 export const DEFAULT_HISTORY_MESSAGE_LIMIT = 250;
 export const MAX_HISTORY_MESSAGE_LIMIT = 1000;
+export const DEFAULT_ATTACHMENT_MAX_COUNT = 5;
+export const DEFAULT_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENT_MAX_COUNT = 20;
+export const MAX_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024;
 
 const DEFAULT_PROCESSING_PLACEHOLDER: Required<ProcessingPlaceholderConfig> = {
   enabled: true,
@@ -122,6 +126,26 @@ function resolveProcessingPlaceholder(
   };
 }
 
+function resolveAttachmentDownloads(
+  cfg: RingCentralConfig,
+  env: NodeJS.ProcessEnv,
+): ResolvedAccount["attachments"] {
+  const attachments = cfg.attachments ?? {};
+  return {
+    enabled: readBoolean(attachments.enabled, true, "RC_ATTACHMENT_DOWNLOAD_ENABLED", env),
+    maxCount: clampInteger(
+      readNumber(attachments.maxCount, DEFAULT_ATTACHMENT_MAX_COUNT, "RC_ATTACHMENT_MAX_COUNT", env),
+      0,
+      MAX_ATTACHMENT_MAX_COUNT,
+    ),
+    maxBytes: clampInteger(
+      readNumber(attachments.maxBytes, DEFAULT_ATTACHMENT_MAX_BYTES, "RC_ATTACHMENT_MAX_BYTES", env),
+      1,
+      MAX_ATTACHMENT_MAX_BYTES,
+    ),
+  };
+}
+
 export function getRcConfig(cfg: unknown): RingCentralConfig {
   const channels = (cfg as Record<string, unknown> | undefined)?.channels as
     | Record<string, unknown>
@@ -174,6 +198,7 @@ export function resolveAccount(
     dmPolicy,
     textChunkLimit: cfg.textChunkLimit,
     processingPlaceholder: resolveProcessingPlaceholder(cfg, env),
+    attachments: resolveAttachmentDownloads(cfg, env),
     historyMessageLimit,
     homeChannel: cfg.homeChannel ?? readEnv("RC_HOME_CHANNEL", env),
     homeChannelName: cfg.homeChannelName ?? readEnv("RC_HOME_CHANNEL_NAME", env),
