@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate tag version
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const tag = process.env.GITHUB_REF_NAME || "";
+          if (!tag.startsWith("v")) {
+            console.error(`Release tag must start with "v": ${tag}`);
+            process.exit(1);
+          }
+          const version = tag.slice(1);
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          if (pkg.version !== version) {
+            console.error(`Tag ${tag} does not match package.json version ${pkg.version}`);
+            process.exit(1);
+          }
+          console.log(`Validated release ${tag}`);
+          NODE
+
+      - name: Run typecheck
+        run: pnpm typecheck
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
