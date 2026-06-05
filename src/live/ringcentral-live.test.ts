@@ -292,7 +292,7 @@ function buildBaseSummaryContext(): Record<string, SummaryDetail> {
     cleanup: readBooleanEnv("RC_E2E_CLEANUP", false),
     record_count: readRecordCount(),
     ws_timeout_ms: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
-    file_upload: readBooleanEnv("RC_E2E_FILE_UPLOAD", false),
+    file_upload: readBooleanEnv("RC_E2E_FILE_UPLOAD", true),
   };
 }
 
@@ -651,7 +651,7 @@ function readLiveEnv(): LiveEnv {
     recordCount: readRecordCount(),
     cleanup: readBooleanEnv("RC_E2E_CLEANUP", false),
     wsTimeoutMs: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
-    fileUpload: readBooleanEnv("RC_E2E_FILE_UPLOAD", false),
+    fileUpload: readBooleanEnv("RC_E2E_FILE_UPLOAD", true),
   };
   if (missing.length > 0) {
     throw new Error(`Missing RingCentral live smoke variables: ${missing.join(", ")}`);
