@@ -365,7 +365,17 @@ describe("ringCentralMessageActions", () => {
   });
 
   it("returns no actions when unconfigured", () => {
-    expect(ringCentralMessageActions.describeMessageTool({ cfg: { channels: { ringcentral: {} } } as any })?.actions).toEqual([]);
+    const origEnv = { ...process.env };
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("RC_") || key.startsWith("RINGCENTRAL_")) {
+          delete process.env[key];
+        }
+      }
+      expect(ringCentralMessageActions.describeMessageTool({ cfg: { channels: { ringcentral: {} } } as any })?.actions).toEqual([]);
+    } finally {
+      process.env = origEnv;
+    }
   });
 
   it("extracts send target for shared send action", () => {

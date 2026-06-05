@@ -4,6 +4,7 @@ import type {
   ChannelIngressRouteDescriptor,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundAttachmentsForAgent } from "./attachments.js";
 import type { RingCentralClient } from "./client.js";
 import { deleteMessage, sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
@@ -148,6 +149,13 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const bodyForAgent = stripRcMentions(text, inCtx.botPersonId, {
     preserveNonBotMentions: chatType === "direct" && !!account.ownerCredentials,
   });
+  const mediaPayload = await resolveInboundAttachmentsForAgent({
+    attachments: post.attachments,
+    primaryClient: botClient,
+    fallbackClient: ownerClient,
+    account,
+    log,
+  });
   const runtime = (inCtx.channelRuntime ?? {}) as ChannelRuntimeLike;
   const peer = {
     kind: chatType,
@@ -203,6 +211,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     OriginatingChannel: RINGCENTRAL_CHANNEL_ID,
     OriginatingTo: target,
     OwnerAllowFrom: allowFrom,
+    ...mediaPayload,
   });
 
   await dispatchReplyWithBufferedBlockDispatcher({

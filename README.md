@@ -8,6 +8,7 @@ RingCentral Team Messaging channel plugin for OpenClaw.
 - Optional owner JWT credentials for owner-observed groups, history reads, and fallback sends
 - OpenClaw channel ingress policy for DM/group allowlists, pairing, mention gates, and ignored/allowed channels
 - Threaded replies with `off`, `first`, and `all` modes
+- Inbound file/image attachments are downloaded into OpenClaw managed media storage after admission
 - Optional processing placeholder while an agent run is active
 - Shared OpenClaw `message` actions for send/read/edit/delete/channel-info
 - Optional `ringcentral_get_recent_messages` agent tool
@@ -72,6 +73,9 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `RC_REPLY_TO_MODE` | `off`, `first`, or `all`; default `first` |
 | `RC_PROCESSING_EMOJI_ENABLED` | Enable processing placeholder, default `true` |
 | `RC_PROCESSING_EMOJI_EDIT_DELAY_SECONDS` | Delay before placeholder update |
+| `RC_ATTACHMENT_DOWNLOAD_ENABLED` | Download admitted inbound attachments, default `true` |
+| `RC_ATTACHMENT_MAX_COUNT` | Max attachments per inbound message, default `5` |
+| `RC_ATTACHMENT_MAX_BYTES` | Max bytes per downloaded attachment, default `5242880` |
 | `RC_HISTORY_MESSAGE_LIMIT` | Default history record count, max `1000` |
 | `RC_HOME_CHANNEL` | Default history/home chat ID |
 | `RC_HOME_CHANNEL_NAME` | Display name for the home chat |
@@ -88,6 +92,9 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `dm.allowFrom` | `[]` | Stable sender IDs allowed in DMs |
 | `replyToMode` | `first` | Threading behavior for replies |
 | `noThreadChannels` | `[]` | Chat IDs that force unthreaded sends |
+| `attachments.enabled` | `true` | Download admitted RingCentral file/image attachments |
+| `attachments.maxCount` | `5` | Max attachments to process per inbound message |
+| `attachments.maxBytes` | `5242880` | Max bytes per downloaded attachment |
 | `allowBots` | `false` | Allow bot-authored inbound messages |
 
 When owner credentials are configured and no explicit DM allowlist is provided, the effective default is owner-only unless `allowAllUsers` is enabled.

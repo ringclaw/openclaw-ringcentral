@@ -6,6 +6,8 @@ import {
   createOwnerClient,
   type RingCentralClient,
 } from "../client.js";
+import { resolveAccount } from "../accounts.js";
+import { resolveInboundAttachmentsForAgent } from "../attachments.js";
 import { createRingCentralHistoryTool } from "../history-tool.js";
 import { RingCentralWebSocketMonitor } from "../monitor.js";
 import { sendMessage } from "../send.js";
@@ -66,6 +68,12 @@ liveDescribe("RingCentral live smoke", () => {
         assertClientCanReadHistory(botClient, env.chatId, env.recordCount),
       );
 
+      await runFileUploadScenario({
+        env,
+        botClient,
+        ownerClient,
+        createdOwnerPostIds,
+      });
       await runBotSendOwnerReadScenario({
         env,
         botClient,
@@ -157,6 +165,7 @@ interface LiveEnv {
   recordCount: number;
   cleanup: boolean;
   wsTimeoutMs: number;
+  fileUpload: boolean;
 }
 
 interface LiveClients {
@@ -270,6 +279,7 @@ function buildSummaryContext(env: LiveEnv): Record<string, SummaryDetail> {
     cleanup: env.cleanup,
     record_count: env.recordCount,
     ws_timeout_ms: env.wsTimeoutMs,
+    file_upload: env.fileUpload,
   };
 }
 
@@ -282,7 +292,106 @@ function buildBaseSummaryContext(): Record<string, SummaryDetail> {
     cleanup: readBooleanEnv("RC_E2E_CLEANUP", false),
     record_count: readRecordCount(),
     ws_timeout_ms: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
+    file_upload: readBooleanEnv("RC_E2E_FILE_UPLOAD", true),
   };
+}
+
+async function runFileUploadScenario(
+  params: LiveClients & {
+    createdOwnerPostIds: string[];
+  },
+): Promise<void> {
+  if (!params.env.fileUpload) {
+    logSafe("file_upload", { enabled: false });
+    return;
+  }
+
+  const imageFileName = buildUniqueFileName("image", "png");
+  const documentFileName = buildUniqueFileName("document", "txt");
+  const wsWaiter = startBotWebSocketAttachmentWait({
+    botClient: params.botClient,
+    chatId: params.env.chatId,
+    expectedFileName: imageFileName,
+    timeoutMs: params.env.wsTimeoutMs,
+  });
+
+  try {
+    await liveStep("file_upload_ws_connect", () =>
+      withTimeout(wsWaiter.connected, params.env.wsTimeoutMs, "file_upload_ws_connect"),
+    );
+
+    const imageUpload = await liveStep("file_upload_image", () =>
+      params.ownerClient.uploadFile(
+        params.env.chatId,
+        imageFileName,
+        tinyPngBytes(),
+        "image/png",
+      ),
+    );
+    logSafe("file_upload_image", { uploaded: true });
+
+    const imageWsPost = await liveStep("file_upload_ws_receive", () =>
+      withTimeout(wsWaiter.received, params.env.wsTimeoutMs, "file_upload_ws_receive"),
+    );
+    assertLive(hasAttachment(imageWsPost, imageFileName), "file_upload_ws_receive");
+    logSafe("file_upload_ws_receive", { ws_received: true });
+
+    const imagePost = await liveStep("file_upload_image_bot_read", () =>
+      waitForAttachmentPost({
+        client: params.botClient,
+        chatId: params.env.chatId,
+        fileName: imageFileName,
+        uploaded: imageUpload,
+        recordCount: params.env.recordCount,
+      }),
+    );
+    assertLive(imagePost, "file_upload_image_bot_read");
+    params.createdOwnerPostIds.push(String(imagePost.id));
+    logSafe("file_upload_image_bot_read", { found: true });
+
+    await assertAttachmentHandoff({
+      stage: "file_upload_image_handoff",
+      env: params.env,
+      botClient: params.botClient,
+      ownerClient: params.ownerClient,
+      uploaded: imageUpload,
+      post: imagePost,
+    });
+
+    const documentUpload = await liveStep("file_upload_document", () =>
+      params.ownerClient.uploadFile(
+        params.env.chatId,
+        documentFileName,
+        Buffer.from("RingCentral live smoke document attachment\n", "utf8"),
+        "text/plain",
+      ),
+    );
+    logSafe("file_upload_document", { uploaded: true });
+
+    const documentPost = await liveStep("file_upload_document_bot_read", () =>
+      waitForAttachmentPost({
+        client: params.botClient,
+        chatId: params.env.chatId,
+        fileName: documentFileName,
+        uploaded: documentUpload,
+        recordCount: params.env.recordCount,
+      }),
+    );
+    assertLive(documentPost, "file_upload_document_bot_read");
+    params.createdOwnerPostIds.push(String(documentPost.id));
+    logSafe("file_upload_document_bot_read", { found: true });
+
+    await assertAttachmentHandoff({
+      stage: "file_upload_document_handoff",
+      env: params.env,
+      botClient: params.botClient,
+      ownerClient: params.ownerClient,
+      uploaded: documentUpload,
+      post: documentPost,
+    });
+  } finally {
+    await wsWaiter.stop();
+  }
 }
 
 async function runBotSendOwnerReadScenario(params: LiveClients): Promise<void> {
@@ -542,6 +651,7 @@ function readLiveEnv(): LiveEnv {
     recordCount: readRecordCount(),
     cleanup: readBooleanEnv("RC_E2E_CLEANUP", false),
     wsTimeoutMs: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
+    fileUpload: readBooleanEnv("RC_E2E_FILE_UPLOAD", true),
   };
   if (missing.length > 0) {
     throw new Error(`Missing RingCentral live smoke variables: ${missing.join(", ")}`);
@@ -593,6 +703,19 @@ function buildUniqueText(label: string): string {
     .join("\n");
 }
 
+function buildUniqueFileName(label: string, extension: string): string {
+  const runId = process.env.GITHUB_RUN_ID ?? "local";
+  const attempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
+  return `openclaw-ringcentral-e2e-${label}-${runId}-${attempt}-${Date.now()}.${extension}`;
+}
+
+function tinyPngBytes(): Buffer {
+  return Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lS0N2wAAAABJRU5ErkJggg==",
+    "base64",
+  );
+}
+
 function buildCalendarEventPayload(label: string): CreateEventRequest {
   const marker = buildUniqueText(label).split("\n")[0] ?? `[openclaw-ringcentral-e2e:${label}:${Date.now()}]`;
   const start = new Date(Date.now() + 60 * 60 * 1000).toISOString();
@@ -637,6 +760,28 @@ async function waitForPost(
   return undefined;
 }
 
+async function waitForAttachmentPost(params: {
+  client: RingCentralClient;
+  chatId: string;
+  fileName: string;
+  uploaded: unknown;
+  recordCount: number;
+}): Promise<Post | undefined> {
+  const uploadedAsPost = normalizeUploadedPost(params.uploaded);
+  if (uploadedAsPost?.attachments?.length) {
+    return uploadedAsPost;
+  }
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const posts = await readRecentPosts(params.client, params.chatId, params.recordCount);
+    const found = posts.find((post) => hasAttachment(post, params.fileName));
+    if (found) {
+      return found;
+    }
+    await delay(1500);
+  }
+  return undefined;
+}
+
 async function findRecentPost(
   client: RingCentralClient,
   chatId: string,
@@ -645,6 +790,107 @@ async function findRecentPost(
 ): Promise<Post | undefined> {
   const posts = await readRecentPosts(client, chatId, recordCount);
   return posts.find((post) => post.text?.includes(expectedText));
+}
+
+function hasAttachment(post: Post, expectedFileName: string): boolean {
+  const attachments = post.attachments ?? [];
+  return attachments.some((attachment) => {
+    const names = [attachment.fileName, attachment.name].filter(Boolean).map(String);
+    if (names.some((name) => name === expectedFileName)) {
+      return true;
+    }
+    return names.length === 0 && Boolean(attachment.contentUri ?? attachment.uri ?? attachment.id);
+  });
+}
+
+function normalizeUploadedPost(uploaded: unknown): Post | undefined {
+  if (!uploaded || Array.isArray(uploaded) || typeof uploaded !== "object") {
+    return undefined;
+  }
+  const candidate = uploaded as Partial<Post>;
+  return candidate.id && candidate.groupId ? (candidate as Post) : undefined;
+}
+
+function extractUploadAttachments(uploaded: unknown): Post["attachments"] {
+  if (Array.isArray(uploaded)) {
+    return uploaded
+      .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+      .map((entry) => ({
+        id: String(entry.id ?? ""),
+        type: String(entry.type ?? "File"),
+        name: typeof entry.name === "string" ? entry.name : undefined,
+        fileName: typeof entry.fileName === "string" ? entry.fileName : undefined,
+        contentUri: typeof entry.contentUri === "string" ? entry.contentUri : undefined,
+        uri: typeof entry.uri === "string" ? entry.uri : undefined,
+        contentType: typeof entry.contentType === "string" ? entry.contentType : undefined,
+        size: typeof entry.size === "number" ? entry.size : undefined,
+      }))
+      .filter((entry) => entry.id || entry.contentUri || entry.uri);
+  }
+  if (uploaded && typeof uploaded === "object") {
+    const maybePost = uploaded as Partial<Post>;
+    if (maybePost.attachments?.length) {
+      return maybePost.attachments;
+    }
+    const maybeAttachment = uploaded as {
+      id?: unknown;
+      name?: unknown;
+      fileName?: unknown;
+      contentUri?: unknown;
+      uri?: unknown;
+      contentType?: unknown;
+      size?: unknown;
+    };
+    if (typeof maybeAttachment.contentUri === "string" || typeof maybeAttachment.uri === "string") {
+      return [
+        {
+          id: String(maybeAttachment.id ?? ""),
+          type: "File",
+          name: typeof maybeAttachment.name === "string" ? maybeAttachment.name : undefined,
+          fileName: typeof maybeAttachment.fileName === "string" ? maybeAttachment.fileName : undefined,
+          contentUri:
+            typeof maybeAttachment.contentUri === "string" ? maybeAttachment.contentUri : undefined,
+          uri: typeof maybeAttachment.uri === "string" ? maybeAttachment.uri : undefined,
+          contentType:
+            typeof maybeAttachment.contentType === "string" ? maybeAttachment.contentType : undefined,
+          size: typeof maybeAttachment.size === "number" ? maybeAttachment.size : undefined,
+        },
+      ];
+    }
+  }
+  return undefined;
+}
+
+async function assertAttachmentHandoff(params: {
+  stage: string;
+  env: LiveEnv;
+  botClient: RingCentralClient;
+  ownerClient: RingCentralClient;
+  uploaded: unknown;
+  post: Post;
+}): Promise<void> {
+  const attachments = extractUploadAttachments(params.uploaded) ?? params.post.attachments;
+  assertLive(attachments?.length, params.stage);
+  const payload = await liveStep(params.stage, () =>
+    resolveInboundAttachmentsForAgent({
+      attachments,
+      primaryClient: params.botClient,
+      fallbackClient: params.ownerClient,
+      account: resolveAccount({
+        botToken: params.env.botToken,
+        ownerCredentials: {
+          clientId: params.env.ownerClientId,
+          clientSecret: params.env.ownerClientSecret,
+          jwt: params.env.ownerJwtToken,
+        },
+        attachments: { enabled: true, maxCount: 5, maxBytes: 5 * 1024 * 1024 },
+      }),
+      log: () => undefined,
+    }),
+  );
+  const mediaPaths = (payload as { MediaPaths?: unknown }).MediaPaths;
+  assertLive(Array.isArray(mediaPaths) && mediaPaths.length > 0, params.stage);
+  logSafe(params.stage, { media_payload: true });
 }
 
 function hasThreadMetadata(post: Post, rootPostId: string): boolean {
@@ -737,6 +983,62 @@ function startBotWebSocketWait(params: {
     },
     onDiagnostic: (event, details) => {
       logSafe("bot_ws_state", sanitizeDiagnostic(event, details));
+    },
+    log: () => undefined,
+  });
+  const monitorDone = monitor.start().catch((err) => {
+    if (!abortController.signal.aborted) {
+      connected.reject(err);
+      received.reject(err);
+    }
+  });
+  return {
+    connected: connected.promise,
+    received: received.promise,
+    stop: async () => {
+      abortController.abort();
+      await monitorDone.catch(() => undefined);
+    },
+  };
+}
+
+function startBotWebSocketAttachmentWait(params: {
+  botClient: RingCentralClient;
+  chatId: string;
+  expectedFileName: string;
+  timeoutMs: number;
+}): {
+  connected: Promise<void>;
+  received: Promise<Post>;
+  stop: () => Promise<void>;
+} {
+  const abortController = new AbortController();
+  const connected = createDeferred<void>();
+  const received = createDeferred<Post>();
+  connected.promise.catch(() => undefined);
+  received.promise.catch(() => undefined);
+  const monitor = new RingCentralWebSocketMonitor({
+    client: params.botClient,
+    filterOwnCreator: false,
+    abortSignal: abortController.signal,
+    ignoredTexts: [],
+    onConnected: () => {
+      logSafe("file_upload_ws_connect", { ws_connected: true });
+      connected.resolve();
+    },
+    onDisconnected: (err) => {
+      if (!abortController.signal.aborted) {
+        connected.reject(err ?? new Error("ws disconnected"));
+        received.reject(err ?? new Error("ws disconnected"));
+      }
+    },
+    onMessage: (post) => {
+      if (post.groupId === params.chatId && hasAttachment(post, params.expectedFileName)) {
+        received.resolve(post);
+      }
+    },
+    onDiagnostic: (event, details) => {
+      logSafe("file_upload_ws_state", sanitizeDiagnostic(event, details));
     },
     log: () => undefined,
   });

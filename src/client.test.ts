@@ -14,6 +14,20 @@ function jsonResponse(data: unknown, status = 200) {
   };
 }
 
+function binaryResponse(data: Uint8Array, status = 200, contentType = "application/octet-stream") {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    arrayBuffer: () =>
+      Promise.resolve(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)),
+    text: () => Promise.resolve(""),
+    headers: new Map([
+      ["content-type", contentType],
+      ["Content-Type", contentType],
+    ]),
+  };
+}
+
 beforeEach(() => {
   vi.useRealTimers();
   mockFetch.mockReset();
@@ -168,6 +182,61 @@ describe("RingCentralClient", () => {
           headers: expect.objectContaining({ "Content-Type": "image/png" }),
         }),
       );
+    });
+
+    it("downloadAttachment uses bearer auth and returns bounded media bytes", async () => {
+      mockFetch.mockResolvedValueOnce(binaryResponse(new Uint8Array([1, 2, 3]), 200, "image/png"));
+      const result = await client.downloadAttachment({
+        uri: "https://content.example.test/file",
+        fileName: "image.png",
+        maxBytes: 10,
+      });
+
+      expect(result).toMatchObject({
+        contentType: "image/png",
+        fileName: "image.png",
+        size: 3,
+      });
+      expect(Buffer.from(result.buffer)).toEqual(Buffer.from([1, 2, 3]));
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://content.example.test/file",
+        expect.objectContaining({
+          method: "GET",
+          headers: { Authorization: "Bearer tok" },
+        }),
+      );
+    });
+
+    it("downloadAttachment rejects oversized attachment bodies", async () => {
+      mockFetch.mockResolvedValueOnce(binaryResponse(new Uint8Array([1, 2, 3]), 200, "text/plain"));
+      await expect(
+        client.downloadAttachment({
+          uri: "https://content.example.test/file",
+          fileName: "note.txt",
+          maxBytes: 2,
+        }),
+      ).rejects.toThrow("RingCentral attachment too large");
+    });
+
+    it("downloadAttachment retries HTTP 429 with Retry-After", async () => {
+      vi.useFakeTimers();
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 429,
+          text: () => Promise.resolve("rate limited"),
+          headers: new Map([["Retry-After", "0.5"]]),
+        })
+        .mockResolvedValueOnce(binaryResponse(new Uint8Array([1]), 200, "text/plain"));
+
+      const promise = client.downloadAttachment({
+        uri: "https://content.example.test/file",
+        fileName: "note.txt",
+        maxBytes: 10,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(promise).resolves.toMatchObject({ size: 1 });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 

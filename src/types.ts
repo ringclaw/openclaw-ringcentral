@@ -19,7 +19,9 @@ export interface Post {
 export interface Attachment {
   id: string;
   type: string;
+  uri?: string;
   name?: string;
+  fileName?: string;
   contentUri?: string;
   contentType?: string;
   size?: number;
@@ -196,6 +198,12 @@ export interface ProcessingPlaceholderConfig {
   editDelaySeconds?: number;
 }
 
+export interface AttachmentDownloadConfig {
+  enabled?: boolean;
+  maxCount?: number;
+  maxBytes?: number;
+}
+
 export interface RingCentralConfig {
   enabled?: boolean;
   name?: string;
@@ -215,6 +223,7 @@ export interface RingCentralConfig {
   noThreadChannels?: string[];
   replyToMode?: RingCentralReplyToMode;
   processingPlaceholder?: ProcessingPlaceholderConfig;
+  attachments?: AttachmentDownloadConfig;
   historyMessageLimit?: number;
   homeChannel?: string;
   homeChannelName?: string;
@@ -264,6 +273,7 @@ export interface ResolvedAccount {
   dmPolicy: "disabled" | "allowlist" | "pairing" | "open";
   textChunkLimit?: number;
   processingPlaceholder: Required<ProcessingPlaceholderConfig>;
+  attachments: Required<AttachmentDownloadConfig>;
   historyMessageLimit: number;
   homeChannel?: string;
   homeChannelName?: string;

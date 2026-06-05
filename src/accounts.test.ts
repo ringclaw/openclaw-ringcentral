@@ -23,6 +23,11 @@ describe("resolveAccount", () => {
     expect(account.replyToMode).toBe("first");
     expect(account.groupPolicy).toBe("disabled");
     expect(account.requireMention).toBe(true);
+    expect(account.attachments).toEqual({
+      enabled: true,
+      maxCount: 5,
+      maxBytes: 5 * 1024 * 1024,
+    });
     expect(account.ownerCredentials).toBeUndefined();
   });
 
@@ -69,6 +74,29 @@ describe("resolveAccount", () => {
   it("keeps bot-only DM default open", () => {
     expect(resolveAccount({ botToken: "bot" }).dmPolicy).toBe("open");
   });
+
+  it("resolves inbound attachment limits from config and RC_* env", () => {
+    process.env.RC_ATTACHMENT_DOWNLOAD_ENABLED = "false";
+    process.env.RC_ATTACHMENT_MAX_COUNT = "7";
+    process.env.RC_ATTACHMENT_MAX_BYTES = "12345";
+
+    expect(resolveAccount({ botToken: "bot" }).attachments).toEqual({
+      enabled: false,
+      maxCount: 7,
+      maxBytes: 12345,
+    });
+
+    expect(
+      resolveAccount({
+        botToken: "bot",
+        attachments: { enabled: true, maxCount: 2, maxBytes: 2048 },
+      }).attachments,
+    ).toEqual({
+      enabled: true,
+      maxCount: 2,
+      maxBytes: 2048,
+    });
+  });
 });
 
 describe("isAccountConfigured", () => {
@@ -91,6 +119,6 @@ describe("hasOwnerCredentials", () => {
         }),
       ),
     ).toBe(true);
-    expect(hasOwnerCredentials(resolveAccount({ botToken: "bot" }))).toBe(false);
+    expect(hasOwnerCredentials(resolveAccount({ botToken: "bot" }, {}))).toBe(false);
   });
 });
