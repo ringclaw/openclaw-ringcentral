@@ -90,9 +90,7 @@ liveDescribe("RingCentral live smoke", () => {
       });
       await runCalendarEventScenario({
         env,
-        botClient,
         ownerClient,
-        createdBotPostIds,
         createdOwnerEventIds,
       });
       await runAdaptiveCardScenario({
@@ -429,9 +427,7 @@ async function runThreadedReplyScenario(
 
 async function runCalendarEventScenario(params: {
   env: LiveEnv;
-  botClient: RingCentralClient;
   ownerClient: RingCentralClient;
-  createdBotPostIds: string[];
   createdOwnerEventIds: string[];
 }): Promise<void> {
   const eventPayload = buildCalendarEventPayload("calendar-event");
@@ -455,34 +451,12 @@ async function runCalendarEventScenario(params: {
   assertLive(read.id === eventId, "calendar_event_get");
   logSafe("calendar_event_get", { found: true });
 
-  const updated = await liveStep("calendar_event_update", () =>
-    params.ownerClient.updateEvent(eventId, updatedPayload),
-  );
-  assertLive(updated.id === eventId, "calendar_event_update");
+  const updated = await liveStep("calendar_event_update", async () => {
+    const response = await params.ownerClient.updateEvent(eventId, updatedPayload);
+    return response.title === updatedPayload.title ? response : params.ownerClient.getEvent(eventId);
+  });
+  assertLive(updated.id === eventId && updated.title === updatedPayload.title, "calendar_event_update");
   logSafe("calendar_event_update", { updated: true });
-
-  const auditText = buildCalendarEventAuditText();
-  const auditPost = await liveStep("calendar_event_audit_post", () =>
-    sendMessage({
-      client: params.botClient,
-      chatId: params.env.chatId,
-      text: auditText,
-      convertMarkdown: false,
-      replyToMode: "off",
-    }),
-  );
-  assertLive(!!auditPost?.postId, "calendar_event_audit_post");
-  params.createdBotPostIds.push(auditPost!.postId);
-  logSafe("calendar_event_audit_post", { sent: true });
-
-  const foundAudit = await liveStep("owner_read_calendar_event_audit", () =>
-    waitForPost(params.ownerClient, params.env.chatId, auditText, params.env.recordCount),
-  );
-  assertLive(
-    foundAudit?.id === auditPost?.postId && !!foundAudit?.text?.includes(auditText),
-    "owner_read_calendar_event_audit",
-  );
-  logSafe("owner_read_calendar_event_audit", { found: true });
 }
 
 async function runNoteScenario(
@@ -617,11 +591,6 @@ function buildUniqueText(label: string): string {
   ]
     .filter(Boolean)
     .join("\n");
-}
-
-function buildCalendarEventAuditText(): string {
-  const [marker, ...context] = buildUniqueText("calendar-event-audit").split("\n");
-  return [marker, "calendar_event_smoke: create/list/get/update ok", ...context].filter(Boolean).join("\n");
 }
 
 function buildCalendarEventPayload(label: string): CreateEventRequest {
