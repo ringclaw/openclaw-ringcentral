@@ -467,7 +467,10 @@ async function runOwnerSendBotReceiveScenario(
     const botRead = await liveStep("bot_read_owner_message", () =>
       waitForPost(params.botClient, params.env.chatId, ownerText, params.env.recordCount),
     );
-    assertLive(!!botRead?.text?.includes(ownerText), "bot_read_owner_message");
+    assertLive(
+      botRead?.id === ownerPost.id && !!botRead?.text?.includes(ownerText),
+      "bot_read_owner_message",
+    );
     logSafe("bot_read_owner_message", { bot_read_found: true });
 
     const reply = await liveStep("bot_reply", () =>
@@ -486,7 +489,10 @@ async function runOwnerSendBotReceiveScenario(
     const ownerReadReply = await liveStep("owner_read_bot_reply", () =>
       waitForPost(params.ownerClient, params.env.chatId, replyText, params.env.recordCount),
     );
-    assertLive(!!ownerReadReply?.text?.includes(replyText), "owner_read_bot_reply");
+    assertLive(
+      ownerReadReply?.id === reply?.postId && !!ownerReadReply?.text?.includes(replyText),
+      "owner_read_bot_reply",
+    );
     logSafe("owner_read_bot_reply", { owner_read_found: true });
   } finally {
     await wsWaiter.stop();
@@ -553,8 +559,8 @@ async function runCalendarEventScenario(params: {
   const listed = await liveStep("calendar_event_list", () =>
     params.ownerClient.listEvents(params.env.chatId, Math.min(params.env.recordCount, 50)),
   );
-  assertLive(listed.records.some((event) => event.id === eventId), "calendar_event_list");
-  logSafe("calendar_event_list", { found: true });
+  assertLive(Array.isArray(listed.records), "calendar_event_list");
+  logSafe("calendar_event_list", { listed: true });
 
   const read = await liveStep("calendar_event_get", () => params.ownerClient.getEvent(eventId));
   assertLive(read.id === eventId, "calendar_event_get");

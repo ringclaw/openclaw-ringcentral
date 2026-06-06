@@ -1,6 +1,27 @@
 # OpenClaw RingCentral Channel
 
+[![npm version](https://img.shields.io/npm/v/openclaw-ringcentral)](https://www.npmjs.com/package/openclaw-ringcentral)
+[![Release](https://github.com/ringclaw/openclaw-ringcentral/actions/workflows/release.yml/badge.svg)](https://github.com/ringclaw/openclaw-ringcentral/actions/workflows/release.yml)
+[![CI](https://github.com/ringclaw/openclaw-ringcentral/actions/workflows/ci.yml/badge.svg)](https://github.com/ringclaw/openclaw-ringcentral/actions/workflows/ci.yml)
+[![RingCentral Live Smoke](https://github.com/ringclaw/openclaw-ringcentral/actions/workflows/ringcentral-live-smoke.yml/badge.svg)](https://github.com/ringclaw/openclaw-ringcentral/actions/workflows/ringcentral-live-smoke.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=ringclaw_openclaw-ringcentral&metric=alert_status)](https://sonarcloud.io/dashboard?id=ringclaw_openclaw-ringcentral)
+
 RingCentral Team Messaging channel plugin for OpenClaw.
+
+## Install
+
+Install the published plugin package through the OpenClaw plugin manager:
+
+```bash
+openclaw plugins install npm:openclaw-ringcentral
+openclaw plugins enable ringcentral
+openclaw gateway restart
+```
+
+The explicit `npm:` source matches OpenClaw's plugin install contract and lets
+OpenClaw manage plugin registration, policy updates, and Gateway reloads.
+Use `npm install openclaw-ringcentral` only when inspecting the package or doing
+manual development outside the OpenClaw plugin manager.
 
 ## Features
 
@@ -127,6 +148,17 @@ pnpm test
 pnpm typecheck
 ```
 
+## Release
+
+Stable releases are published by pushing a `v*` tag. The release workflow
+validates that the tag matches `package.json`, runs typecheck and tests,
+publishes `openclaw-ringcentral` to npmjs with `NPM_TOKEN`, and creates a GitHub
+Release.
+
+Pushes to `main` also keep publishing beta builds to GitHub Packages through
+`publish-beta.yml`; those beta packages are separate from the stable npmjs
+release.
+
 ## Live Smoke Test
 
 The GitHub Actions workflow `RingCentral Live Smoke` validates the real RingCentral API path without starting OpenClaw and without any LLM secrets.
@@ -142,7 +174,12 @@ Configure the GitHub Environment `ringcentral-live` with these secrets:
 | `RC_E2E_CHAT_ID` | Test chat/group ID |
 | `RC_SERVER_URL` | Optional API server URL, default `https://platform.ringcentral.com` |
 
-Run the workflow manually from GitHub Actions. It sends a unique test message, reads it back through owner history, exercises `ringcentral_get_recent_messages`, and deletes the test message by default.
+The workflow runs on PRs and `main`, and can also be run manually from GitHub
+Actions. It sends unique test messages, validates bot/owner reads, WebSocket
+receive, threaded replies, artifact APIs, and file/image upload handling. Test
+messages are retained by default for channel auditability; set `cleanup=true`
+for manual runs when cleanup is desired. File/image upload smoke is enabled by
+default and can be disabled manually with `file_upload=false`.
 
 Local live verification is also available:
 
