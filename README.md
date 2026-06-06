@@ -10,14 +10,18 @@ RingCentral Team Messaging channel plugin for OpenClaw.
 
 ## Install
 
-Install the published npm package:
+Install the published plugin package through the OpenClaw plugin manager:
 
 ```bash
-npm install openclaw-ringcentral
+openclaw plugins install npm:openclaw-ringcentral
+openclaw plugins enable ringcentral
+openclaw gateway restart
 ```
 
-The package metadata declares the OpenClaw channel extension and uses
-`openclaw-ringcentral` as the npm install spec.
+The explicit `npm:` source matches OpenClaw's plugin install contract and lets
+OpenClaw manage plugin registration, policy updates, and Gateway reloads.
+Use `npm install openclaw-ringcentral` only when inspecting the package or doing
+manual development outside the OpenClaw plugin manager.
 
 ## Features
 
