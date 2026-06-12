@@ -81,3 +81,9 @@ jobs:
       - name: Run typecheck
         run: pnpm typecheck
         continue-on-error: true
+
+      - name: Run build
+        run: pnpm build
+
+      - name: Check package contents
+        run: pnpm pack:check

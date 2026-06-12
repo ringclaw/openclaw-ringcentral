@@ -1,11 +1,15 @@
 {
   "name": "openclaw-ringcentral",
-  "version": "2026.6.7",
+  "version": "2026.6.12",
   "type": "module",
-  "main": "index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "description": "OpenClaw RingCentral Team Messaging channel plugin",
   "license": "MIT",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "pack:check": "node scripts/verify-package.mjs",
+    "prepack": "pnpm build",
     "test": "vitest run",
     "test:live:ringcentral": "RC_E2E_REQUIRED=true vitest run src/live/ringcentral-live.test.ts --testTimeout=60000",
     "test:watch": "vitest",
@@ -17,9 +21,10 @@
   },
   "homepage": "https://github.com/ringclaw/openclaw-ringcentral#readme",
   "keywords": ["openclaw", "ringcentral", "team-messaging", "chat", "bot"],
-  "files": ["src", "index.ts", "openclaw.plugin.json", "README.md"],
+  "files": ["dist", "openclaw.plugin.json", "README.md", "LICENSE"],
   "openclaw": {
     "extensions": ["./index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
     "channel": {
       "id": "ringcentral",
       "label": "RingCentral",
@@ -32,6 +37,7 @@
       "order": 56
     },
     "setupEntry": "./setup-entry.ts",
+    "runtimeSetupEntry": "./dist/setup-entry.js",
     "install": {
       "npmSpec": "openclaw-ringcentral",
       "defaultChoice": "npm"

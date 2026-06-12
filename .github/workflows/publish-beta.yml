@@ -64,6 +64,8 @@ jobs:
           "
 
       - name: Publish to GitHub Packages
-        run: pnpm publish --no-git-checks
+        run: |
+          pnpm build
+          pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

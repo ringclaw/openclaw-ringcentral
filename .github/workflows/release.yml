@@ -54,6 +54,12 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Run build
+        run: pnpm build
+
+      - name: Check package contents
+        run: pnpm pack:check
+
       - name: Publish to npm
         run: pnpm publish --no-git-checks --access public --provenance
         env:
