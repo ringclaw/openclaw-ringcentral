@@ -61,6 +61,7 @@ export const ringCentralConfigSchema = z.object({
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   processingPlaceholder: processingPlaceholderSchema.optional(),
   attachments: attachmentsSchema.optional(),
+  debugInboundMessages: z.boolean().optional(),
   historyMessageLimit: z.number().int().min(1).max(1000).optional(),
   homeChannel: z.string().optional(),
   homeChannelName: z.string().optional(),

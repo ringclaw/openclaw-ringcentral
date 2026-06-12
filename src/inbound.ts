@@ -85,6 +85,15 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     return;
   }
 
+  if (account.debugInboundMessages) {
+    logInboundMessageDebug(log, {
+      chatId,
+      chatType,
+      creatorId: senderId,
+      text,
+    });
+  }
+
   const mentionFacts = resolveMentionFacts({
     text,
     mentions: post.mentions,
@@ -143,6 +152,13 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       reason: ingress.ingress.reasonCode,
       target: chatId,
     });
+    if (account.debugInboundMessages) {
+      logInboundDropDebug(log, {
+        chatId,
+        reasonCode: ingress.ingress.reasonCode,
+        textLength: text.length,
+      });
+    }
     return;
   }
 
@@ -468,6 +484,43 @@ function resolveMentionFacts(params: {
       explicitMentions.some((mention) => mention.id === params.botPersonId)
     : hasAnyMention;
   return { canDetectMention: true, wasMentioned, hasAnyMention };
+}
+
+function logInboundMessageDebug(
+  log: (message: string) => void,
+  details: {
+    chatId: string;
+    creatorId: string;
+    chatType: ChatType;
+    text: string;
+  },
+): void {
+  log(
+    `[ringcentral] inbound message ${JSON.stringify({
+      chatId: details.chatId,
+      creatorId: details.creatorId,
+      chatType: details.chatType,
+      textLength: details.text.length,
+      text: details.text,
+    })}`,
+  );
+}
+
+function logInboundDropDebug(
+  log: (message: string) => void,
+  details: {
+    chatId: string;
+    reasonCode: string;
+    textLength: number;
+  },
+): void {
+  log(
+    `[ringcentral] inbound message dropped ${JSON.stringify({
+      chatId: details.chatId,
+      reasonCode: details.reasonCode,
+      textLength: details.textLength,
+    })}`,
+  );
 }
 
 async function getChatSafe(client: RingCentralClient, chatId: string): Promise<Chat | null> {
