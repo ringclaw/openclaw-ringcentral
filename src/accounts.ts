@@ -199,6 +199,7 @@ export function resolveAccount(
     textChunkLimit: cfg.textChunkLimit,
     processingPlaceholder: resolveProcessingPlaceholder(cfg, env),
     attachments: resolveAttachmentDownloads(cfg, env),
+    debugInboundMessages: readBoolean(cfg.debugInboundMessages, false, "RC_DEBUG_INBOUND_MESSAGES", env),
     historyMessageLimit,
     homeChannel: cfg.homeChannel ?? readEnv("RC_HOME_CHANNEL", env),
     homeChannelName: cfg.homeChannelName ?? readEnv("RC_HOME_CHANNEL_NAME", env),

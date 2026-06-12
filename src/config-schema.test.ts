@@ -36,6 +36,7 @@ describe("ringCentralConfigSchema", () => {
         delayedText: "delay",
         editDelaySeconds: 3,
       },
+      debugInboundMessages: true,
       historyMessageLimit: 250,
       homeChannel: "g-home",
       homeChannelName: "Home",

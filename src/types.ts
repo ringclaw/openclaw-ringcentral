@@ -224,6 +224,7 @@ export interface RingCentralConfig {
   replyToMode?: RingCentralReplyToMode;
   processingPlaceholder?: ProcessingPlaceholderConfig;
   attachments?: AttachmentDownloadConfig;
+  debugInboundMessages?: boolean;
   historyMessageLimit?: number;
   homeChannel?: string;
   homeChannelName?: string;
@@ -274,6 +275,7 @@ export interface ResolvedAccount {
   textChunkLimit?: number;
   processingPlaceholder: Required<ProcessingPlaceholderConfig>;
   attachments: Required<AttachmentDownloadConfig>;
+  debugInboundMessages: boolean;
   historyMessageLimit: number;
   homeChannel?: string;
   homeChannelName?: string;

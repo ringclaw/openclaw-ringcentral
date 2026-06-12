@@ -70,6 +70,10 @@ function makeRuntime() {
   };
 }
 
+function loggedMessages(log: ReturnType<typeof vi.fn>): string[] {
+  return log.mock.calls.map(([message]) => String(message));
+}
+
 describe("stripRcMentions", () => {
   it("removes leading bot mentions and inline mentions", () => {
     expect(stripRcMentions("![:Person](bot) summarize ![:Person](u2)", "bot")).toBe("summarize");
@@ -117,6 +121,57 @@ describe("handleInboundPost", () => {
     );
   });
 
+  it("does not log inbound message text by default", async () => {
+    const runtime = makeRuntime();
+    const log = vi.fn();
+    await handleInboundPost({
+      post: makePost({ text: "private debug text" }),
+      cfg: {},
+      botClient: makeClient(),
+      account: resolveAccount({
+        botToken: "bot",
+        groupPolicy: "open",
+        requireMention: false,
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log,
+    });
+
+    expect(loggedMessages(log).some((message) => message.includes("private debug text"))).toBe(false);
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("logs inbound message text when debug logging is enabled", async () => {
+    const runtime = makeRuntime();
+    const log = vi.fn();
+    await handleInboundPost({
+      post: makePost({ text: "debug me" }),
+      cfg: {},
+      botClient: makeClient(),
+      account: resolveAccount({
+        botToken: "bot",
+        debugInboundMessages: true,
+        groupPolicy: "open",
+        requireMention: false,
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log,
+    });
+
+    const message = loggedMessages(log).find((entry) => entry.startsWith("[ringcentral] inbound message "));
+    expect(message).toContain('"chatId":"g1"');
+    expect(message).toContain('"creatorId":"u1"');
+    expect(message).toContain('"chatType":"group"');
+    expect(message).toContain('"textLength":8');
+    expect(message).toContain('"text":"debug me"');
+  });
+
   it("drops groups when groupPolicy is disabled", async () => {
     const runtime = makeRuntime();
     const client = makeClient();
@@ -137,6 +192,47 @@ describe("handleInboundPost", () => {
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(client.downloadAttachment).not.toHaveBeenCalled();
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("logs debug drop summary without attachment details", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    const log = vi.fn();
+    await handleInboundPost({
+      post: makePost({
+        text: "drop me",
+        attachments: [
+          {
+            id: "a1",
+            type: "File",
+            contentUri: "https://content.example.test/a.png",
+            name: "secret.png",
+          },
+        ],
+      }),
+      cfg: {},
+      botClient: client,
+      account: resolveAccount({
+        botToken: "bot",
+        debugInboundMessages: true,
+        groupPolicy: "disabled",
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log,
+    });
+
+    const messages = loggedMessages(log);
+    expect(messages.some((message) => message.includes('"text":"drop me"'))).toBe(true);
+    const drop = messages.find((message) => message.startsWith("[ringcentral] inbound message dropped "));
+    expect(drop).toContain('"chatId":"g1"');
+    expect(drop).toContain('"textLength":7');
+    expect(drop).toContain("reasonCode");
+    expect(messages.join("\n")).not.toContain("https://content.example.test/a.png");
+    expect(messages.join("\n")).not.toContain("secret.png");
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(client.downloadAttachment).not.toHaveBeenCalled();
   });
 
   it("allows DM senders by email alias", async () => {

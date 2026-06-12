@@ -111,6 +111,11 @@
     "attachments.enabled": { "label": "Download Attachments", "advanced": true },
     "attachments.maxCount": { "label": "Max Attachments Per Message", "advanced": true },
     "attachments.maxBytes": { "label": "Max Attachment Bytes", "advanced": true },
+    "debugInboundMessages": {
+      "label": "Debug Inbound Message Text",
+      "help": "Log admitted RingCentral inbound message text for troubleshooting. Leave disabled in production.",
+      "advanced": true
+    },
     "historyMessageLimit": { "label": "History Message Limit", "advanced": true },
     "homeChannel": { "label": "Home Channel", "advanced": true },
     "homeChannelName": { "label": "Home Channel Name", "advanced": true },
@@ -212,6 +217,7 @@
           "maxBytes": { "type": "integer", "minimum": 1, "maximum": 104857600 }
         }
       },
+      "debugInboundMessages": { "type": "boolean" },
       "historyMessageLimit": { "type": "integer", "minimum": 1, "maximum": 1000 },
       "homeChannel": { "type": "string" },
       "homeChannelName": { "type": "string" },
