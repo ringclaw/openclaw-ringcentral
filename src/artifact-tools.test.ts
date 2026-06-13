@@ -45,6 +45,11 @@ describe("RingCentral artifact tools", () => {
     expect(tools).toEqual([...RINGCENTRAL_ARTIFACT_TOOL_NAMES]);
 
     const manifest = JSON.parse(readFileSync("openclaw.plugin.json", "utf8"));
+    expect(manifest.channelConfigs?.ringcentral).toMatchObject({
+      label: "RingCentral",
+      schema: manifest.configSchema,
+      uiHints: manifest.uiHints,
+    });
     for (const toolName of RINGCENTRAL_ARTIFACT_TOOL_NAMES) {
       expect(manifest.contracts.tools).toContain(toolName);
       expect(manifest.toolMetadata[toolName]).toEqual({ optional: true });

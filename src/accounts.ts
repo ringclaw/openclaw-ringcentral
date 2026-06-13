@@ -179,6 +179,8 @@ export function resolveAccount(
     1,
     MAX_HISTORY_MESSAGE_LIMIT,
   );
+  const requireMentionEnv = readEnv("RC_REQUIRE_MENTION", env);
+  const requireMention = readBoolean(cfg.requireMention, true, "RC_REQUIRE_MENTION", env);
 
   return {
     botToken,
@@ -192,7 +194,8 @@ export function resolveAccount(
     freeResponseChannels: readDelimitedEntries(cfg.freeResponseChannels, "RC_FREE_RESPONSE_CHANNELS", env),
     noThreadChannels: readDelimitedEntries(cfg.noThreadChannels, "RC_NO_THREAD_CHANNELS", env),
     replyToMode: resolveReplyToMode(cfg.replyToMode, env),
-    requireMention: readBoolean(cfg.requireMention, true, "RC_REQUIRE_MENTION", env),
+    requireMention,
+    requireMentionExplicit: cfg.requireMention !== undefined || requireMentionEnv !== undefined,
     threadRequireMention: readBoolean(cfg.threadRequireMention, true, "RC_THREAD_REQUIRE_MENTION", env),
     groupPolicy: cfg.groupPolicy ?? "disabled",
     dmPolicy,

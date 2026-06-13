@@ -269,6 +269,7 @@ export interface ResolvedAccount {
   noThreadChannels: string[];
   replyToMode: RingCentralReplyToMode;
   requireMention: boolean;
+  requireMentionExplicit: boolean;
   threadRequireMention: boolean;
   groupPolicy: "disabled" | "allowlist" | "open";
   dmPolicy: "disabled" | "allowlist" | "pairing" | "open";

@@ -23,6 +23,7 @@ describe("resolveAccount", () => {
     expect(account.replyToMode).toBe("first");
     expect(account.groupPolicy).toBe("disabled");
     expect(account.requireMention).toBe(true);
+    expect(account.requireMentionExplicit).toBe(false);
     expect(account.attachments).toEqual({
       enabled: true,
       maxCount: 5,
@@ -37,12 +38,15 @@ describe("resolveAccount", () => {
     process.env.RC_SERVER_URL = "https://sandbox.example.com";
     process.env.RC_ALLOWED_USER_EMAILS = "Owner@Example.com, teammate@example.com";
     process.env.RC_REPLY_TO_MODE = "all";
+    process.env.RC_REQUIRE_MENTION = "false";
     process.env.RC_DEBUG_INBOUND_MESSAGES = "true";
     const account = resolveAccount({});
     expect(account.botToken).toBe("env-bot-token");
     expect(account.server).toBe("https://sandbox.example.com");
     expect(account.allowedUserEmails).toEqual(["owner@example.com", "teammate@example.com"]);
     expect(account.replyToMode).toBe("all");
+    expect(account.requireMention).toBe(false);
+    expect(account.requireMentionExplicit).toBe(true);
     expect(account.debugInboundMessages).toBe(true);
   });
 
@@ -80,6 +84,12 @@ describe("resolveAccount", () => {
 
   it("resolves debug inbound message logging from config", () => {
     expect(resolveAccount({ botToken: "bot", debugInboundMessages: true }).debugInboundMessages).toBe(true);
+  });
+
+  it("tracks explicit requireMention config", () => {
+    const account = resolveAccount({ botToken: "bot", requireMention: false });
+    expect(account.requireMention).toBe(false);
+    expect(account.requireMentionExplicit).toBe(true);
   });
 
   it("resolves inbound attachment limits from config and RC_* env", () => {
