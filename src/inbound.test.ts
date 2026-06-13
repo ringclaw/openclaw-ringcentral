@@ -394,7 +394,7 @@ describe("handleInboundPost", () => {
     );
   });
 
-  it("onReplyStart posts the typing indicator and onCleanup deletes it; deliver only sends the actual reply", async () => {
+  it("deliver promotes the typing post to the reply in place; cleanup is a no-op", async () => {
     const runtime = makeRuntime();
     const client = makeClient();
     const log = vi.fn();
@@ -408,7 +408,7 @@ describe("handleInboundPost", () => {
     });
 
     await handleInboundPost({
-      post: makePost({ groupId: "typing-lifecycle-chat" }),
+      post: makePost({ groupId: "typing-promote-chat" }),
       cfg: {},
       botClient: client,
       account: resolveAccount({
@@ -423,22 +423,64 @@ describe("handleInboundPost", () => {
     });
 
     // 1. onReplyStart: post the 👀 once
-    expect(client.sendPost).toHaveBeenCalledTimes(2);
-    expect(client.sendPost).toHaveBeenNthCalledWith(1, "typing-lifecycle-chat", "\u{1F440}", {
+    expect(client.sendPost).toHaveBeenCalledTimes(1);
+    expect(client.sendPost).toHaveBeenNthCalledWith(1, "typing-promote-chat", "\u{1F440}", {
       parentPostId: "p1",
     });
-    // 2. deliver: send the actual reply, do NOT touch the typing post
-    expect(client.updatePost).not.toHaveBeenCalled();
-    expect(client.sendPost).toHaveBeenNthCalledWith(2, "typing-lifecycle-chat", "final reply", {
-      parentPostId: "p1",
-    });
-    // 3. onCleanup: delete the typing post once
-    expect(client.deletePost).toHaveBeenCalledTimes(1);
-    expect(client.deletePost).toHaveBeenCalledWith("typing-lifecycle-chat", "sent-1");
+    // 2. deliver: update the typing post in place to the reply; no new message, no delete
+    expect(client.updatePost).toHaveBeenCalledTimes(1);
+    expect(client.updatePost).toHaveBeenCalledWith("typing-promote-chat", "sent-1", "final reply");
+    // 3. onCleanup: no-op (typing post was promoted, no longer in the closure)
+    expect(client.deletePost).not.toHaveBeenCalled();
 
     const messages = loggedMessages(log);
-    expect(messages.some((m) => m.includes("created typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
-    expect(messages.some((m) => m.includes("deleted typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
+    expect(messages.some((m) => m.includes("created typing post postId=sent-1 chatId=typing-promote-chat"))).toBe(true);
+    expect(messages.some((m) => m.includes("typing post promoted to reply postId=sent-1 chatId=typing-promote-chat"))).toBe(true);
+    expect(messages.some((m) => m.includes("deleted typing post"))).toBe(false);
+  });
+
+  it("deliver falls back to clear+new when updatePost fails", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    const log = vi.fn();
+    client.updatePost.mockRejectedValueOnce(new Error("edit race"));
+    runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
+      await params.dispatcherOptions.onReplyStart();
+      const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
+      await delivered;
+      await params.dispatcherOptions.onCleanup();
+      return { queuedFinal: false, counts: {} };
+    });
+
+    await handleInboundPost({
+      post: makePost({ groupId: "typing-fallback-chat" }),
+      cfg: {},
+      botClient: client,
+      account: resolveAccount({
+        botToken: "bot",
+        groupPolicy: "open",
+        requireMention: false,
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log,
+    });
+
+    // 1. sendPost: 1 for the typing post (👀) + 1 for the fallback reply
+    expect(client.sendPost).toHaveBeenCalledTimes(2);
+    expect(client.sendPost).toHaveBeenNthCalledWith(1, "typing-fallback-chat", "\u{1F440}", { parentPostId: "p1" });
+    expect(client.sendPost).toHaveBeenNthCalledWith(2, "typing-fallback-chat", "final reply", { parentPostId: "p1" });
+    // 2. updatePost: 1 call that failed
+    expect(client.updatePost).toHaveBeenCalledTimes(1);
+    // 3. deletePost: 1 (from the fallback path, succeeded)
+    expect(client.deletePost).toHaveBeenCalledTimes(1);
+    expect(client.deletePost).toHaveBeenCalledWith("typing-fallback-chat", "sent-1");
+
+    const messages = loggedMessages(log);
+    expect(messages.some((m) => m.includes("failed to update typing post, falling back to new message"))).toBe(true);
+    expect(messages.some((m) => m.includes("created typing post postId=sent-1 chatId=typing-fallback-chat"))).toBe(true);
+    expect(messages.some((m) => m.includes("deleted typing post postId=sent-1 chatId=typing-fallback-chat"))).toBe(true);
   });
 
   it("onCleanup retries and warns when deletePost is persistently rejected", async () => {
@@ -447,11 +489,10 @@ describe("handleInboundPost", () => {
       const runtime = makeRuntime();
       const client = makeClient();
       const log = vi.fn();
+      // Skip deliver entirely (simulate: agent never produces a reply).
       client.deletePost.mockRejectedValue(new Error("delete denied"));
       runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
         await params.dispatcherOptions.onReplyStart();
-        const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
-        await delivered;
         const cleanup = params.dispatcherOptions.onCleanup();
         await vi.advanceTimersByTimeAsync(250);
         await cleanup;

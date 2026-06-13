@@ -6,7 +6,7 @@ import type {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundAttachmentsForAgent } from "./attachments.js";
 import { RingCentralApiError, type RingCentralClient } from "./client.js";
-import { sendMessage, sendTypingIndicator } from "./send.js";
+import { sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
 import { buildChannelTarget, buildDmTarget, buildGroupTarget } from "./targets.js";
 import { channelSetMatches, type ThreadParticipationTracker } from "./threading.js";
@@ -379,9 +379,40 @@ function createDispatcherOptions(params: {
       void clearTypingPost();
     },
     deliver: async (payload: ReplyPayload) => {
-      // Typing-indicator cleanup is the platform's job, not deliver's.
-      // deliver just sends the actual reply (and any media).
-      if (payload.text) {
+      // If a typing post is up, try to promote it in place to the reply
+      // (best UX: chat sees one message, not two). On update failure, fall
+      // back to clear+new. Either way, typingPostId is cleared so the
+      // platform's TypingController.cleanup becomes a no-op.
+      if (payload.text && typingPostId) {
+        const id = typingPostId;
+        typingPostId = undefined;
+        try {
+          await updateMessage(params.botClient, params.chatId, id, payload.text);
+          params.tracker.remember(id);
+          params.markOwnPost?.(id);
+          params.log(
+            `[ringcentral] typing post promoted to reply postId=${id} chatId=${params.chatId}`,
+          );
+        } catch (err) {
+          logTypingPostWarning(params.log, "failed to update typing post, falling back to new message", {
+            chatId: params.chatId,
+            postId: id,
+            error: formatTypingPostError(err),
+          });
+          const deleted = await deleteTypingPostWithRetry({
+            botClient: params.botClient,
+            chatId: params.chatId,
+            postId: id,
+            log: params.log,
+          });
+          if (deleted) {
+            params.log(
+              `[ringcentral] deleted typing post postId=${id} chatId=${params.chatId}`,
+            );
+          }
+          await sendReplyText(params, payload.text);
+        }
+      } else if (payload.text) {
         await sendReplyText(params, payload.text);
       }
       if (payload.mediaUrl) {
