@@ -360,15 +360,17 @@ function createDispatcherOptions(params: {
     }
     const idToDelete = typingPostId;
     typingPostId = undefined;
-    await deleteTypingPostWithRetry({
+    const deleted = await deleteTypingPostWithRetry({
       botClient: params.botClient,
       chatId: params.chatId,
       postId: idToDelete,
       log: params.log,
     });
-    params.log(
-      `[ringcentral] deleted typing post postId=${idToDelete} chatId=${params.chatId}`,
-    );
+    if (deleted) {
+      params.log(
+        `[ringcentral] deleted typing post postId=${idToDelete} chatId=${params.chatId}`,
+      );
+    }
   };
 
   return {
@@ -408,11 +410,11 @@ async function deleteTypingPostWithRetry(params: {
   chatId: string;
   postId: string;
   log: (message: string) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       await params.botClient.deletePost(params.chatId, params.postId);
-      return;
+      return true;
     } catch (err) {
       if (attempt === 1) {
         await sleep(250);
@@ -425,6 +427,7 @@ async function deleteTypingPostWithRetry(params: {
       });
     }
   }
+  return false;
 }
 
 function logTypingPostWarning(

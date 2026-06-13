@@ -480,6 +480,7 @@ describe("handleInboundPost", () => {
       expect(messages.join("\n")).toContain('"chatId":"typing-stuck-chat"');
       expect(messages.join("\n")).toContain('"postId":"sent-1"');
       expect(messages.join("\n")).toContain('"error":"Error: delete denied"');
+      expect(messages.some((message) => message.includes("deleted typing post postId=sent-1"))).toBe(false);
     } finally {
       vi.useRealTimers();
     }
