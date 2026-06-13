@@ -72,6 +72,45 @@ Owner credentials for history/fallback:
 
 `credentials` is still accepted as a deprecated config alias for `ownerCredentials`.
 
+## Pair With A Dedicated Agent
+
+Route RingCentral traffic to its own agent instead of the default webchat/TUI
+agent. This keeps operator debugging history out of RingCentral conversations
+and prevents a global coding `tools.profile` from removing the optional
+`ringcentral_*` tools.
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "your-default-model"
+    },
+    "list": [
+      { "id": "main", "default": true },
+      {
+        "id": "ringcentral-bot",
+        "tools": {
+          "profile": null
+        }
+      }
+    ]
+  },
+  "bindings": [
+    {
+      "agentId": "ringcentral-bot",
+      "match": {
+        "channel": "ringcentral"
+      }
+    }
+  ]
+}
+```
+
+`tools.profile: null` is intentional: the RingCentral agent should not inherit a
+global coding profile that removes channel tools such as
+`ringcentral_get_recent_messages`, `ringcentral_create_calendar_event`,
+`ringcentral_create_note`, or `ringcentral_create_adaptive_card`.
+
 ## Environment
 
 Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally ignored.

@@ -511,6 +511,20 @@
     "ringcentral": {
       "label": "RingCentral",
       "description": "OpenClaw RingCentral Team Messaging channel plugin",
+      "recommendedAgent": {
+        "id": "ringcentral-bot",
+        "model": null,
+        "tools": {
+          "profile": null
+        },
+        "workspace": null
+      },
+      "binding": {
+        "agentId": "ringcentral-bot",
+        "match": {
+          "channel": "ringcentral"
+        }
+      },
       "schema": {
         "type": "object",
         "additionalProperties": false,
