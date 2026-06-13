@@ -121,6 +121,52 @@ describe("handleInboundPost", () => {
     );
   });
 
+  it("does not require mentions by default when groupPolicy is open", async () => {
+    const runtime = makeRuntime();
+    await handleInboundPost({
+      post: makePost({ text: "plain group message" }),
+      cfg: {},
+      botClient: makeClient(),
+      account: resolveAccount({
+        botToken: "bot",
+        groupPolicy: "open",
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("honors explicit requireMention when groupPolicy is open", async () => {
+    const runtime = makeRuntime();
+    const log = vi.fn();
+    await handleInboundPost({
+      post: makePost({ text: "plain group message" }),
+      cfg: {},
+      botClient: makeClient(),
+      account: resolveAccount({
+        botToken: "bot",
+        debugInboundMessages: true,
+        groupPolicy: "open",
+        requireMention: true,
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log,
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    const drop = loggedMessages(log).find((message) => message.startsWith("[ringcentral] inbound message dropped "));
+    expect(drop).toContain('"reasonCode":"activation_skipped"');
+    expect(drop).toContain('"groupPolicy":"open"');
+    expect(drop).toContain('"requireMention":true');
+  });
+
   it("does not log inbound message text by default", async () => {
     const runtime = makeRuntime();
     const log = vi.fn();
@@ -192,6 +238,50 @@ describe("handleInboundPost", () => {
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(client.downloadAttachment).not.toHaveBeenCalled();
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("logs a non-debug drop warning once per chat without message text", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    const log = vi.fn();
+    const post = makePost({
+      groupId: "warn-chat",
+      text: "private skipped text",
+      attachments: [
+        {
+          id: "a1",
+          type: "File",
+          contentUri: "https://content.example.test/private.png",
+          name: "private.png",
+        },
+      ],
+    });
+
+    for (let i = 0; i < 2; i += 1) {
+      await handleInboundPost({
+        post,
+        cfg: {},
+        botClient: client,
+        account: resolveAccount({ botToken: "bot", groupPolicy: "disabled" }),
+        botPersonId: "bot",
+        channelRuntime: runtime,
+        tracker: new ThreadParticipationTracker(),
+        log,
+      });
+    }
+
+    const messages = loggedMessages(log);
+    const warnings = messages.filter((message) => message.startsWith("[ringcentral] WARN inbound message dropped "));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"chatId":"warn-chat"');
+    expect(warnings[0]).toContain('"groupPolicy":"disabled"');
+    expect(warnings[0]).toContain('"requireMention":true');
+    expect(warnings[0]).toContain('"debugHint"');
+    expect(messages.join("\n")).not.toContain("private skipped text");
+    expect(messages.join("\n")).not.toContain("https://content.example.test/private.png");
+    expect(messages.join("\n")).not.toContain("private.png");
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(client.downloadAttachment).not.toHaveBeenCalled();
   });
 
   it("logs debug drop summary without attachment details", async () => {

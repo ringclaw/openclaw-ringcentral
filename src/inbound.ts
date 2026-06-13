@@ -19,6 +19,8 @@ type FinalizeInboundContext =
 type DispatchReplyWithBufferedBlockDispatcher =
   typeof import("openclaw/plugin-sdk/reply-runtime")["dispatchReplyWithBufferedBlockDispatcher"];
 
+const warnedDropChatIds = new Set<string>();
+
 type ChannelRuntimeLike = {
   routing?: {
     resolveAgentRoute?: ResolveAgentRoute;
@@ -102,13 +104,13 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const routeDescriptors = buildRouteDescriptors({ account, chatId, chatType });
   const groupConfig = account.config.groups?.[chatId];
   const threadFollowup = !!post.parentPostId && tracker.has(post.parentPostId);
-  const requireMention =
-    chatType === "direct"
-      ? false
-      : channelSetMatches(account.freeResponseChannels, chatId) ||
-          (threadFollowup && !account.threadRequireMention)
-        ? false
-        : groupConfig?.requireMention ?? account.requireMention;
+  const requireMention = resolveRequireMention({
+    account,
+    chatId,
+    chatType,
+    groupConfigRequireMention: groupConfig?.requireMention,
+    threadFollowup,
+  });
   const allowFrom = buildAllowFrom({
     account,
     ownerPersonId: inCtx.ownerPersonId,
@@ -155,7 +157,21 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     if (account.debugInboundMessages) {
       logInboundDropDebug(log, {
         chatId,
+        chatType,
+        groupConfigRequireMention: groupConfig?.requireMention,
+        groupPolicy: account.groupPolicy,
         reasonCode: ingress.ingress.reasonCode,
+        requireMention,
+        textLength: text.length,
+      });
+    } else {
+      logFirstInboundDropWarning(log, {
+        chatId,
+        chatType,
+        groupConfigRequireMention: groupConfig?.requireMention,
+        groupPolicy: account.groupPolicy,
+        reasonCode: ingress.ingress.reasonCode,
+        requireMention,
         textLength: text.length,
       });
     }
@@ -510,17 +526,80 @@ function logInboundDropDebug(
   log: (message: string) => void,
   details: {
     chatId: string;
+    chatType: ChatType;
+    groupConfigRequireMention?: boolean;
+    groupPolicy: string;
     reasonCode: string;
+    requireMention: boolean;
     textLength: number;
   },
 ): void {
   log(
     `[ringcentral] inbound message dropped ${JSON.stringify({
       chatId: details.chatId,
+      chatType: details.chatType,
+      groupConfigRequireMention: details.groupConfigRequireMention,
+      groupPolicy: details.groupPolicy,
       reasonCode: details.reasonCode,
+      requireMention: details.requireMention,
       textLength: details.textLength,
     })}`,
   );
+}
+
+function logFirstInboundDropWarning(
+  log: (message: string) => void,
+  details: {
+    chatId: string;
+    chatType: ChatType;
+    groupConfigRequireMention?: boolean;
+    groupPolicy: string;
+    reasonCode: string;
+    requireMention: boolean;
+    textLength: number;
+  },
+): void {
+  if (warnedDropChatIds.has(details.chatId)) {
+    return;
+  }
+  warnedDropChatIds.add(details.chatId);
+  log(
+    `[ringcentral] WARN inbound message dropped ${JSON.stringify({
+      chatId: details.chatId,
+      chatType: details.chatType,
+      groupConfigRequireMention: details.groupConfigRequireMention,
+      groupPolicy: details.groupPolicy,
+      reasonCode: details.reasonCode,
+      requireMention: details.requireMention,
+      textLength: details.textLength,
+      debugHint: "set debugInboundMessages=true for message text and drop details",
+    })}`,
+  );
+}
+
+function resolveRequireMention(params: {
+  account: ResolvedAccount;
+  chatId: string;
+  chatType: ChatType;
+  groupConfigRequireMention?: boolean;
+  threadFollowup: boolean;
+}): boolean {
+  if (params.chatType === "direct") {
+    return false;
+  }
+  if (
+    channelSetMatches(params.account.freeResponseChannels, params.chatId) ||
+    (params.threadFollowup && !params.account.threadRequireMention)
+  ) {
+    return false;
+  }
+  if (params.groupConfigRequireMention !== undefined) {
+    return params.groupConfigRequireMention;
+  }
+  if (params.account.requireMentionExplicit) {
+    return params.account.requireMention;
+  }
+  return params.account.groupPolicy === "open" ? false : params.account.requireMention;
 }
 
 async function getChatSafe(client: RingCentralClient, chatId: string): Promise<Chat | null> {
