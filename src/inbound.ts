@@ -6,7 +6,7 @@ import type {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundAttachmentsForAgent } from "./attachments.js";
 import { RingCentralApiError, type RingCentralClient } from "./client.js";
-import { sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
+import { sendMessage, sendTypingIndicator } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
 import { buildChannelTarget, buildDmTarget, buildGroupTarget } from "./targets.js";
 import { channelSetMatches, type ThreadParticipationTracker } from "./threading.js";
@@ -320,31 +320,19 @@ function createDispatcherOptions(params: {
   markOwnPost?: (postId: string) => void;
   log: (message: string) => void;
 }) {
-  let placeholderPostId: string | undefined;
-  let placeholderTimer: ReturnType<typeof setTimeout> | undefined;
+  // Typing-indicator lifecycle is owned by the OpenClaw `TypingController`:
+  //   - `onReplyStart`  (called by `TypingController.startTypingLoop`) posts the 👀
+  //   - `onCleanup`     (called by `TypingController.cleanup` after dispatch idle) deletes it
+  // `deliver` no longer mutates the typing post — it only sends the actual reply.
+  // The previous `placeholderTimer` setTimeout + `deliver`-side `updateMessage` →
+  // `payload.text` rewrite are gone; see #173 for the rationale.
+  let typingPostId: string | undefined;
 
-  const clearPlaceholderTimer = () => {
-    clearTimeout(placeholderTimer);
-    placeholderTimer = undefined;
-  };
-  const clearPlaceholder = async () => {
-    clearPlaceholderTimer();
-    if (placeholderPostId) {
-      const idToDelete = placeholderPostId;
-      placeholderPostId = undefined;
-      await deletePlaceholderWithRetry({
-        botClient: params.botClient,
-        chatId: params.chatId,
-        postId: idToDelete,
-        log: params.log,
-      });
-    }
-  };
-  const startPlaceholder = async () => {
-    if (!params.account.processingPlaceholder.enabled || placeholderPostId) {
+  const startTypingPost = async () => {
+    if (!params.account.processingPlaceholder.enabled || typingPostId) {
       return;
     }
-    placeholderPostId = await sendTypingIndicator(
+    const newId = await sendTypingIndicator(
       params.botClient,
       params.chatId,
       params.account.processingPlaceholder.initialText,
@@ -358,54 +346,43 @@ function createDispatcherOptions(params: {
         markOwnPost: params.markOwnPost,
       },
     );
-    if (placeholderPostId && params.account.processingPlaceholder.editDelaySeconds > 0) {
-      const idToUpdate = placeholderPostId;
-      placeholderTimer = setTimeout(() => {
-        void updateMessage(
-          params.botClient,
-          params.chatId,
-          idToUpdate,
-          params.account.processingPlaceholder.delayedText,
-          false,
-        ).catch((err) => {
-          logPlaceholderWarning(params.log, "failed to update delayed placeholder", {
-            chatId: params.chatId,
-            postId: idToUpdate,
-            error: formatPlaceholderError(err),
-          });
-        });
-      }, params.account.processingPlaceholder.editDelaySeconds * 1000);
+    if (newId) {
+      typingPostId = newId;
+      params.log(
+        `[ringcentral] created typing post postId=${newId} chatId=${params.chatId}`,
+      );
+    }
+  };
+
+  const clearTypingPost = async () => {
+    if (!typingPostId) {
+      return;
+    }
+    const idToDelete = typingPostId;
+    typingPostId = undefined;
+    const deleted = await deleteTypingPostWithRetry({
+      botClient: params.botClient,
+      chatId: params.chatId,
+      postId: idToDelete,
+      log: params.log,
+    });
+    if (deleted) {
+      params.log(
+        `[ringcentral] deleted typing post postId=${idToDelete} chatId=${params.chatId}`,
+      );
     }
   };
 
   return {
-    onReplyStart: startPlaceholder,
+    onReplyStart: startTypingPost,
     onCleanup: () => {
-      void clearPlaceholder();
+      void clearTypingPost();
     },
     deliver: async (payload: ReplyPayload) => {
-      clearPlaceholderTimer();
+      // Typing-indicator cleanup is the platform's job, not deliver's.
+      // deliver just sends the actual reply (and any media).
       if (payload.text) {
-        if (placeholderPostId) {
-          try {
-            await updateMessage(params.botClient, params.chatId, placeholderPostId, payload.text);
-            params.tracker.remember(placeholderPostId);
-            params.markOwnPost?.(placeholderPostId);
-            placeholderPostId = undefined;
-          } catch (err) {
-            logPlaceholderWarning(params.log, "failed to update placeholder", {
-              chatId: params.chatId,
-              postId: placeholderPostId,
-              error: formatPlaceholderError(err),
-            });
-            await clearPlaceholder();
-            await sendReplyText(params, payload.text);
-          }
-        } else {
-          await sendReplyText(params, payload.text);
-        }
-      } else if (placeholderPostId) {
-        await clearPlaceholder();
+        await sendReplyText(params, payload.text);
       }
       if (payload.mediaUrl) {
         await sendMessage({
@@ -428,31 +405,32 @@ function createDispatcherOptions(params: {
   };
 }
 
-async function deletePlaceholderWithRetry(params: {
+async function deleteTypingPostWithRetry(params: {
   botClient: RingCentralClient;
   chatId: string;
   postId: string;
   log: (message: string) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       await params.botClient.deletePost(params.chatId, params.postId);
-      return;
+      return true;
     } catch (err) {
       if (attempt === 1) {
         await sleep(250);
         continue;
       }
-      logPlaceholderWarning(params.log, "placeholder stuck after delete retry", {
+      logTypingPostWarning(params.log, "typing post stuck after delete retry", {
         chatId: params.chatId,
         postId: params.postId,
-        error: formatPlaceholderError(err),
+        error: formatTypingPostError(err),
       });
     }
   }
+  return false;
 }
 
-function logPlaceholderWarning(
+function logTypingPostWarning(
   log: (message: string) => void,
   event: string,
   details: {
@@ -470,7 +448,7 @@ function logPlaceholderWarning(
   );
 }
 
-function formatPlaceholderError(err: unknown): string {
+function formatTypingPostError(err: unknown): string {
   if (err instanceof RingCentralApiError) {
     return `HTTP ${err.status}`;
   }
