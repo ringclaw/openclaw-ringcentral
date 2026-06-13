@@ -393,4 +393,93 @@ describe("handleInboundPost", () => {
       }),
     );
   });
+
+  it("logs placeholder update failures, retries cleanup, and sends fallback reply", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime();
+      const client = makeClient();
+      const log = vi.fn();
+      client.updatePost.mockRejectedValueOnce(new Error("edit race"));
+      client.deletePost.mockRejectedValueOnce(new Error("transient delete")).mockResolvedValueOnce(undefined);
+      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
+        await params.dispatcherOptions.onReplyStart();
+        const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
+        await vi.advanceTimersByTimeAsync(250);
+        await delivered;
+        return { queuedFinal: false, counts: {} };
+      });
+
+      await handleInboundPost({
+        post: makePost({ groupId: "placeholder-update-chat" }),
+        cfg: {},
+        botClient: client,
+        account: resolveAccount({
+          botToken: "bot",
+          groupPolicy: "open",
+          requireMention: false,
+        }),
+        botPersonId: "bot",
+        channelRuntime: runtime,
+        tracker: new ThreadParticipationTracker(),
+        log,
+      });
+
+      expect(client.updatePost).toHaveBeenCalledWith("placeholder-update-chat", "sent-1", "final reply");
+      expect(client.deletePost).toHaveBeenCalledTimes(2);
+      expect(client.sendPost).toHaveBeenNthCalledWith(1, "placeholder-update-chat", "👀", {
+        parentPostId: "p1",
+      });
+      expect(client.sendPost).toHaveBeenNthCalledWith(2, "placeholder-update-chat", "final reply", {
+        parentPostId: "p1",
+      });
+      const messages = loggedMessages(log);
+      expect(messages.some((message) => message.includes("failed to update placeholder"))).toBe(true);
+      expect(messages.join("\n")).toContain('"postId":"sent-1"');
+      expect(messages.join("\n")).toContain('"error":"Error: edit race"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs stuck placeholders when cleanup retry is exhausted", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime();
+      const client = makeClient();
+      const log = vi.fn();
+      client.deletePost.mockRejectedValue(new Error("delete denied"));
+      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
+        await params.dispatcherOptions.onReplyStart();
+        const delivered = params.dispatcherOptions.deliver({});
+        await vi.advanceTimersByTimeAsync(250);
+        await delivered;
+        return { queuedFinal: false, counts: {} };
+      });
+
+      await handleInboundPost({
+        post: makePost({ groupId: "placeholder-stuck-chat" }),
+        cfg: {},
+        botClient: client,
+        account: resolveAccount({
+          botToken: "bot",
+          groupPolicy: "open",
+          requireMention: false,
+        }),
+        botPersonId: "bot",
+        channelRuntime: runtime,
+        tracker: new ThreadParticipationTracker(),
+        log,
+      });
+
+      expect(client.deletePost).toHaveBeenCalledTimes(2);
+      const messages = loggedMessages(log);
+      expect(messages.some((message) => message.includes("placeholder stuck after delete retry"))).toBe(true);
+      expect(messages.join("\n")).toContain('"chatId":"placeholder-stuck-chat"');
+      expect(messages.join("\n")).toContain('"postId":"sent-1"');
+      expect(messages.join("\n")).toContain('"error":"Error: delete denied"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

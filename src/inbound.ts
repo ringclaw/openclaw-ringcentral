@@ -5,8 +5,8 @@ import type {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundAttachmentsForAgent } from "./attachments.js";
-import type { RingCentralClient } from "./client.js";
-import { deleteMessage, sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
+import { RingCentralApiError, type RingCentralClient } from "./client.js";
+import { sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
 import { buildChannelTarget, buildDmTarget, buildGroupTarget } from "./targets.js";
 import { channelSetMatches, type ThreadParticipationTracker } from "./threading.js";
@@ -258,6 +258,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       sourceThreadId: post.threadId,
       tracker,
       markOwnPost: inCtx.markOwnPost,
+      log,
     }),
   });
 }
@@ -317,6 +318,7 @@ function createDispatcherOptions(params: {
   sourceThreadId?: string | number | null;
   tracker: ThreadParticipationTracker;
   markOwnPost?: (postId: string) => void;
+  log: (message: string) => void;
 }) {
   let placeholderPostId: string | undefined;
   let placeholderTimer: ReturnType<typeof setTimeout> | undefined;
@@ -328,8 +330,14 @@ function createDispatcherOptions(params: {
   const clearPlaceholder = async () => {
     clearPlaceholderTimer();
     if (placeholderPostId) {
-      await deleteMessage(params.botClient, params.chatId, placeholderPostId);
+      const idToDelete = placeholderPostId;
       placeholderPostId = undefined;
+      await deletePlaceholderWithRetry({
+        botClient: params.botClient,
+        chatId: params.chatId,
+        postId: idToDelete,
+        log: params.log,
+      });
     }
   };
   const startPlaceholder = async () => {
@@ -351,14 +359,21 @@ function createDispatcherOptions(params: {
       },
     );
     if (placeholderPostId && params.account.processingPlaceholder.editDelaySeconds > 0) {
+      const idToUpdate = placeholderPostId;
       placeholderTimer = setTimeout(() => {
         void updateMessage(
           params.botClient,
           params.chatId,
-          placeholderPostId!,
+          idToUpdate,
           params.account.processingPlaceholder.delayedText,
           false,
-        ).catch(() => undefined);
+        ).catch((err) => {
+          logPlaceholderWarning(params.log, "failed to update delayed placeholder", {
+            chatId: params.chatId,
+            postId: idToUpdate,
+            error: formatPlaceholderError(err),
+          });
+        });
       }, params.account.processingPlaceholder.editDelaySeconds * 1000);
     }
   };
@@ -377,7 +392,12 @@ function createDispatcherOptions(params: {
             params.tracker.remember(placeholderPostId);
             params.markOwnPost?.(placeholderPostId);
             placeholderPostId = undefined;
-          } catch {
+          } catch (err) {
+            logPlaceholderWarning(params.log, "failed to update placeholder", {
+              chatId: params.chatId,
+              postId: placeholderPostId,
+              error: formatPlaceholderError(err),
+            });
             await clearPlaceholder();
             await sendReplyText(params, payload.text);
           }
@@ -406,6 +426,62 @@ function createDispatcherOptions(params: {
       console.error(`[ringcentral] ${info.kind} reply error:`, err);
     },
   };
+}
+
+async function deletePlaceholderWithRetry(params: {
+  botClient: RingCentralClient;
+  chatId: string;
+  postId: string;
+  log: (message: string) => void;
+}): Promise<void> {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await params.botClient.deletePost(params.chatId, params.postId);
+      return;
+    } catch (err) {
+      if (attempt === 1) {
+        await sleep(250);
+        continue;
+      }
+      logPlaceholderWarning(params.log, "placeholder stuck after delete retry", {
+        chatId: params.chatId,
+        postId: params.postId,
+        error: formatPlaceholderError(err),
+      });
+    }
+  }
+}
+
+function logPlaceholderWarning(
+  log: (message: string) => void,
+  event: string,
+  details: {
+    chatId: string;
+    postId?: string;
+    error: string;
+  },
+): void {
+  log(
+    `[ringcentral] WARN ${event} ${JSON.stringify({
+      chatId: details.chatId,
+      postId: details.postId,
+      error: details.error,
+    })}`,
+  );
+}
+
+function formatPlaceholderError(err: unknown): string {
+  if (err instanceof RingCentralApiError) {
+    return `HTTP ${err.status}`;
+  }
+  if (err instanceof Error) {
+    return `${err.name}: ${err.message}`;
+  }
+  return String(err);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function sendReplyText(
