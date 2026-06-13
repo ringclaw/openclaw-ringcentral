@@ -394,55 +394,54 @@ describe("handleInboundPost", () => {
     );
   });
 
-  it("logs placeholder update failures, retries cleanup, and sends fallback reply", async () => {
-    vi.useFakeTimers();
-    try {
-      const runtime = makeRuntime();
-      const client = makeClient();
-      const log = vi.fn();
-      client.updatePost.mockRejectedValueOnce(new Error("edit race"));
-      client.deletePost.mockRejectedValueOnce(new Error("transient delete")).mockResolvedValueOnce(undefined);
-      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
-        await params.dispatcherOptions.onReplyStart();
-        const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
-        await vi.advanceTimersByTimeAsync(250);
-        await delivered;
-        return { queuedFinal: false, counts: {} };
-      });
+  it("onReplyStart posts the typing indicator and onCleanup deletes it; deliver only sends the actual reply", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    const log = vi.fn();
+    runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
+      await params.dispatcherOptions.onReplyStart();
+      const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
+      await delivered;
+      // TypingController.cleanup() drives the platform's `onCleanup` after dispatch idle.
+      await params.dispatcherOptions.onCleanup();
+      return { queuedFinal: false, counts: {} };
+    });
 
-      await handleInboundPost({
-        post: makePost({ groupId: "placeholder-update-chat" }),
-        cfg: {},
-        botClient: client,
-        account: resolveAccount({
-          botToken: "bot",
-          groupPolicy: "open",
-          requireMention: false,
-        }),
-        botPersonId: "bot",
-        channelRuntime: runtime,
-        tracker: new ThreadParticipationTracker(),
-        log,
-      });
+    await handleInboundPost({
+      post: makePost({ groupId: "typing-lifecycle-chat" }),
+      cfg: {},
+      botClient: client,
+      account: resolveAccount({
+        botToken: "bot",
+        groupPolicy: "open",
+        requireMention: false,
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log,
+    });
 
-      expect(client.updatePost).toHaveBeenCalledWith("placeholder-update-chat", "sent-1", "final reply");
-      expect(client.deletePost).toHaveBeenCalledTimes(2);
-      expect(client.sendPost).toHaveBeenNthCalledWith(1, "placeholder-update-chat", "👀", {
-        parentPostId: "p1",
-      });
-      expect(client.sendPost).toHaveBeenNthCalledWith(2, "placeholder-update-chat", "final reply", {
-        parentPostId: "p1",
-      });
-      const messages = loggedMessages(log);
-      expect(messages.some((message) => message.includes("failed to update placeholder"))).toBe(true);
-      expect(messages.join("\n")).toContain('"postId":"sent-1"');
-      expect(messages.join("\n")).toContain('"error":"Error: edit race"');
-    } finally {
-      vi.useRealTimers();
-    }
+    // 1. onReplyStart: post the 👀 once
+    expect(client.sendPost).toHaveBeenCalledTimes(2);
+    expect(client.sendPost).toHaveBeenNthCalledWith(1, "typing-lifecycle-chat", "\u{1F440}", {
+      parentPostId: "p1",
+    });
+    // 2. deliver: send the actual reply, do NOT touch the typing post
+    expect(client.updatePost).not.toHaveBeenCalled();
+    expect(client.sendPost).toHaveBeenNthCalledWith(2, "typing-lifecycle-chat", "final reply", {
+      parentPostId: "p1",
+    });
+    // 3. onCleanup: delete the typing post once
+    expect(client.deletePost).toHaveBeenCalledTimes(1);
+    expect(client.deletePost).toHaveBeenCalledWith("typing-lifecycle-chat", "sent-1");
+
+    const messages = loggedMessages(log);
+    expect(messages.some((m) => m.includes("created typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
+    expect(messages.some((m) => m.includes("deleted typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
   });
 
-  it("logs stuck placeholders when cleanup retry is exhausted", async () => {
+  it("onCleanup retries and warns when deletePost is persistently rejected", async () => {
     vi.useFakeTimers();
     try {
       const runtime = makeRuntime();
@@ -451,14 +450,16 @@ describe("handleInboundPost", () => {
       client.deletePost.mockRejectedValue(new Error("delete denied"));
       runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
         await params.dispatcherOptions.onReplyStart();
-        const delivered = params.dispatcherOptions.deliver({});
-        await vi.advanceTimersByTimeAsync(250);
+        const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
         await delivered;
+        const cleanup = params.dispatcherOptions.onCleanup();
+        await vi.advanceTimersByTimeAsync(250);
+        await cleanup;
         return { queuedFinal: false, counts: {} };
       });
 
       await handleInboundPost({
-        post: makePost({ groupId: "placeholder-stuck-chat" }),
+        post: makePost({ groupId: "typing-stuck-chat" }),
         cfg: {},
         botClient: client,
         account: resolveAccount({
@@ -472,10 +473,11 @@ describe("handleInboundPost", () => {
         log,
       });
 
+      // Retry once, then give up; total 2 deletePost calls.
       expect(client.deletePost).toHaveBeenCalledTimes(2);
       const messages = loggedMessages(log);
-      expect(messages.some((message) => message.includes("placeholder stuck after delete retry"))).toBe(true);
-      expect(messages.join("\n")).toContain('"chatId":"placeholder-stuck-chat"');
+      expect(messages.some((message) => message.includes("typing post stuck after delete retry"))).toBe(true);
+      expect(messages.join("\n")).toContain('"chatId":"typing-stuck-chat"');
       expect(messages.join("\n")).toContain('"postId":"sent-1"');
       expect(messages.join("\n")).toContain('"error":"Error: delete denied"');
     } finally {
