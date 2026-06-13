@@ -142,9 +142,15 @@ describe("deleteMessage", () => {
     expect((client as any).deletePost).toHaveBeenCalledWith("c1", "p1");
   });
 
-  it("swallows errors silently", async () => {
+  it("logs deletion failures without throwing", async () => {
     const client = createMockClient();
-    (client as any).deletePost.mockRejectedValueOnce(new Error("404"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    (client as any).deletePost.mockRejectedValueOnce(new RingCentralApiError(404, "not found"));
     await expect(deleteMessage(client, "c1", "p1")).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("[ringcentral] failed to delete post "));
+    expect(warn.mock.calls[0]?.[0]).toContain('"chatId":"c1"');
+    expect(warn.mock.calls[0]?.[0]).toContain('"postId":"p1"');
+    expect(warn.mock.calls[0]?.[0]).toContain('"error":"HTTP 404"');
+    warn.mockRestore();
   });
 });

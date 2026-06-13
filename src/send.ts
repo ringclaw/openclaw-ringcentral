@@ -1,6 +1,6 @@
 // Outbound message delivery: text, media, placeholders, and owner fallback.
 
-import { isAuthzOrNotFoundError, type RingCentralClient } from "./client.js";
+import { isAuthzOrNotFoundError, RingCentralApiError, type RingCentralClient } from "./client.js";
 import { markdownToMiniMarkdown } from "./markdown.js";
 import { resolveReplyTransport, type ThreadParticipationTracker } from "./threading.js";
 import type { RingCentralReplyToMode } from "./types.js";
@@ -169,7 +169,23 @@ export async function deleteMessage(
 ): Promise<void> {
   try {
     await client.deletePost(chatId, postId);
-  } catch {
-    // ignore best-effort cleanup failures
+  } catch (err) {
+    console.warn(
+      `[ringcentral] failed to delete post ${JSON.stringify({
+        chatId,
+        postId,
+        error: formatSendError(err),
+      })}`,
+    );
   }
+}
+
+function formatSendError(err: unknown): string {
+  if (err instanceof RingCentralApiError) {
+    return `HTTP ${err.status}`;
+  }
+  if (err instanceof Error) {
+    return `${err.name}: ${err.message}`;
+  }
+  return String(err);
 }
