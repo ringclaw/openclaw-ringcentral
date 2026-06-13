@@ -47,6 +47,16 @@ describe("RingCentral artifact tools", () => {
     const manifest = JSON.parse(readFileSync("openclaw.plugin.json", "utf8"));
     expect(manifest.channelConfigs?.ringcentral).toMatchObject({
       label: "RingCentral",
+      recommendedAgent: {
+        id: "ringcentral-bot",
+        model: null,
+        tools: { profile: null },
+        workspace: null,
+      },
+      binding: {
+        agentId: "ringcentral-bot",
+        match: { channel: "ringcentral" },
+      },
       schema: manifest.configSchema,
       uiHints: manifest.uiHints,
     });
