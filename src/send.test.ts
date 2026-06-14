@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { sendMessage, sendTypingIndicator, updateMessage, deleteMessage } from "./send.js";
 import { RingCentralApiError, type RingCentralClient } from "./client.js";
+import { ThreadParticipationTracker } from "./threading.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -38,6 +39,22 @@ describe("sendMessage", () => {
     expect((client as any).sendPost).toHaveBeenCalledWith("c1", "reply", {
       parentPostId: "p-parent",
     });
+  });
+
+  it("remembers the root thread when sending a threaded reply", async () => {
+    const client = createMockClient();
+    const tracker = new ThreadParticipationTracker();
+
+    await sendMessage({
+      client,
+      chatId: "c1",
+      text: "reply",
+      replyToId: "p-parent",
+      tracker,
+    });
+
+    expect(tracker.has("post1")).toBe(true);
+    expect(tracker.hasThread("p-parent")).toBe(true);
   });
 
   it("uses fallback client on authz failures", async () => {
