@@ -95,6 +95,9 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       chatType,
       creatorId: senderId,
       text,
+      parentPostId: post.parentPostId,
+      threadId: post.threadId,
+      postId: post.id,
     });
   }
 
@@ -106,6 +109,11 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const routeDescriptors = buildRouteDescriptors({ account, chatId, chatType });
   const groupConfig = account.config.groups?.[chatId];
   const threadFollowup = isTrackedThreadFollowup(post, tracker);
+  if (account.debugInboundMessages && (post.parentPostId || post.threadId)) {
+    log(
+      `[ringcentral] threadFollowup check postId=${post.id} parentPostId=${post.parentPostId ?? "null"} threadId=${post.threadId ?? "null"} threadFollowup=${threadFollowup}`,
+    );
+  }
   const requireMention = resolveRequireMention({
     account,
     chatId,
@@ -178,6 +186,19 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       });
     }
     return;
+  }
+
+  // Register the inbound post's thread so that future replies in the same
+  // thread are recognised as thread followups even when the user (not the
+  // bot) started or continued the thread. We only register the thread ID /
+  // parent post ID — NOT the inbound post id itself, because the tracker's
+  // has() method is also used by resolveReplyTransport(replyToMode:"first")
+  // to decide whether to attach a parentPostId, and registering the inbound
+  // id would suppress the first threaded reply.
+  if (post.threadId) {
+    tracker.rememberThread(post.threadId);
+  } else if (post.parentPostId) {
+    tracker.rememberThread(post.parentPostId);
   }
 
   const bodyForAgent = stripRcMentions(text, inCtx.botPersonId, {
@@ -663,6 +684,9 @@ function logInboundMessageDebug(
     creatorId: string;
     chatType: ChatType;
     text: string;
+    parentPostId?: string;
+    threadId?: string;
+    postId?: string;
   },
 ): void {
   log(
@@ -672,6 +696,9 @@ function logInboundMessageDebug(
       chatType: details.chatType,
       textLength: details.text.length,
       text: details.text,
+      postId: details.postId,
+      parentPostId: details.parentPostId,
+      threadId: details.threadId,
     })}`,
   );
 }
