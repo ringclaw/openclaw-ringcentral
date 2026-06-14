@@ -18,7 +18,7 @@ export const MAX_ATTACHMENT_MAX_COUNT = 20;
 export const MAX_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024;
 
 const DEFAULT_PROCESSING_PLACEHOLDER: Required<ProcessingPlaceholderConfig> = {
-  enabled: true,
+  enabled: false,
   initialText: "👀",
   delayedText: "⏳",
   editDelaySeconds: 2,

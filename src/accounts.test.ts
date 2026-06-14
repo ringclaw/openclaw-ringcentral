@@ -29,6 +29,7 @@ describe("resolveAccount", () => {
       maxCount: 5,
       maxBytes: 5 * 1024 * 1024,
     });
+    expect(account.processingPlaceholder.enabled).toBe(false);
     expect(account.debugInboundMessages).toBe(false);
     expect(account.ownerCredentials).toBeUndefined();
   });
@@ -48,6 +49,22 @@ describe("resolveAccount", () => {
     expect(account.requireMention).toBe(false);
     expect(account.requireMentionExplicit).toBe(true);
     expect(account.debugInboundMessages).toBe(true);
+  });
+
+  it("keeps processing placeholder opt-in via config or RC_* env", () => {
+    expect(resolveAccount({ botToken: "bot" }).processingPlaceholder.enabled).toBe(false);
+    expect(
+      resolveAccount({
+        botToken: "bot",
+        processingPlaceholder: { enabled: true },
+      }).processingPlaceholder.enabled,
+    ).toBe(true);
+    expect(
+      resolveAccount(
+        { botToken: "bot" },
+        { RC_PROCESSING_EMOJI_ENABLED: "true" },
+      ).processingPlaceholder.enabled,
+    ).toBe(true);
   });
 
   it("ignores deprecated RINGCENTRAL_* env", () => {

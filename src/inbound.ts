@@ -6,7 +6,7 @@ import type {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundAttachmentsForAgent } from "./attachments.js";
 import { RingCentralApiError, type RingCentralClient } from "./client.js";
-import { sendMessage, sendTypingIndicator } from "./send.js";
+import { sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
 import { buildChannelTarget, buildDmTarget, buildGroupTarget } from "./targets.js";
 import { channelSetMatches, type ThreadParticipationTracker } from "./threading.js";
@@ -70,6 +70,7 @@ const identity = {
 
 const RC_TYPED_MENTION_RE = /!\[:(?<type>[A-Za-z]+)\]\((?<id>[^)]+)\)/g;
 const RC_LEADING_TYPED_MENTION_RE = /^!\[:(?<type>[A-Za-z]+)\]\((?<id>[^)]+)\)\s*/;
+const TYPING_POST_FAILSAFE_TTL_MS = 2 * 60_000;
 
 const personCache = new Map<string, PersonInfo | null>();
 
@@ -320,13 +321,62 @@ function createDispatcherOptions(params: {
   markOwnPost?: (postId: string) => void;
   log: (message: string) => void;
 }) {
-  // Typing-indicator lifecycle is owned by the OpenClaw `TypingController`:
-  //   - `onReplyStart`  (called by `TypingController.startTypingLoop`) posts the 👀
-  //   - `onCleanup`     (called by `TypingController.cleanup` after dispatch idle) deletes it
-  // `deliver` no longer mutates the typing post — it only sends the actual reply.
-  // The previous `placeholderTimer` setTimeout + `deliver`-side `updateMessage` →
-  // `payload.text` rewrite are gone; see #173 for the rationale.
+  // RingCentral has no native typing API, so this channel uses one temporary
+  // message as a typing indicator while OpenClaw's TypingController owns the
+  // start/cleanup lifecycle.
   let typingPostId: string | undefined;
+  let typingEditTimer: ReturnType<typeof setTimeout> | undefined;
+  let typingFailsafeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const cancelTypingEdit = () => {
+    if (typingEditTimer) {
+      clearTimeout(typingEditTimer);
+      typingEditTimer = undefined;
+    }
+  };
+
+  const cancelTypingFailsafe = () => {
+    if (typingFailsafeTimer) {
+      clearTimeout(typingFailsafeTimer);
+      typingFailsafeTimer = undefined;
+    }
+  };
+
+  const scheduleTypingEdit = () => {
+    cancelTypingEdit();
+    const { delayedText, editDelaySeconds, initialText } = params.account.processingPlaceholder;
+    if (!typingPostId || !delayedText || delayedText === initialText || editDelaySeconds <= 0) {
+      return;
+    }
+    typingEditTimer = setTimeout(() => {
+      typingEditTimer = undefined;
+      const idToEdit = typingPostId;
+      if (!idToEdit) {
+        return;
+      }
+      void updateMessage(params.botClient, params.chatId, idToEdit, delayedText, false).catch((err) => {
+        logTypingPostWarning(params.log, "failed to edit typing post", {
+          chatId: params.chatId,
+          postId: idToEdit,
+          error: formatTypingPostError(err),
+        });
+      });
+    }, editDelaySeconds * 1000);
+  };
+
+  const scheduleTypingFailsafe = (postId: string) => {
+    cancelTypingFailsafe();
+    typingFailsafeTimer = setTimeout(() => {
+      typingFailsafeTimer = undefined;
+      if (typingPostId !== postId) {
+        return;
+      }
+      params.log(
+        `[ringcentral] typing post failsafe cleanup postId=${postId} chatId=${params.chatId}`,
+      );
+      void clearTypingPost();
+    }, TYPING_POST_FAILSAFE_TTL_MS);
+  };
 
   const startTypingPost = async () => {
     if (!params.account.processingPlaceholder.enabled || typingPostId) {
@@ -351,10 +401,14 @@ function createDispatcherOptions(params: {
       params.log(
         `[ringcentral] created typing post postId=${newId} chatId=${params.chatId}`,
       );
+      scheduleTypingEdit();
+      scheduleTypingFailsafe(newId);
     }
   };
 
   const clearTypingPost = async () => {
+    cancelTypingEdit();
+    cancelTypingFailsafe();
     if (!typingPostId) {
       return;
     }
@@ -375,12 +429,11 @@ function createDispatcherOptions(params: {
 
   return {
     onReplyStart: startTypingPost,
-    onCleanup: () => {
-      void clearTypingPost();
-    },
+    onCleanup: clearTypingPost,
     deliver: async (payload: ReplyPayload) => {
-      // Typing-indicator cleanup is the platform's job, not deliver's.
-      // deliver just sends the actual reply (and any media).
+      if (payload.text || payload.mediaUrl) {
+        await clearTypingPost();
+      }
       if (payload.text) {
         await sendReplyText(params, payload.text);
       }
@@ -400,6 +453,7 @@ function createDispatcherOptions(params: {
       }
     },
     onError: (err: unknown, info: { kind: string }) => {
+      void clearTypingPost();
       console.error(`[ringcentral] ${info.kind} reply error:`, err);
     },
   };

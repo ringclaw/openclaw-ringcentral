@@ -30,7 +30,7 @@ manual development outside the OpenClaw plugin manager.
 - OpenClaw channel ingress policy for DM/group allowlists, pairing, mention gates, and ignored/allowed channels
 - Threaded replies with `off`, `first`, and `all` modes
 - Inbound file/image attachments are downloaded into OpenClaw managed media storage after admission
-- Optional processing placeholder while an agent run is active
+- Optional opt-in processing placeholder while an agent run is active
 - Shared OpenClaw `message` actions for send/read/edit/delete/channel-info
 - Optional `ringcentral_get_recent_messages` agent tool
 
@@ -71,6 +71,20 @@ Owner credentials for history/fallback:
 ```
 
 `credentials` is still accepted as a deprecated config alias for `ownerCredentials`.
+
+Opt in to the emoji processing placeholder:
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "processingPlaceholder": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
 
 ## Pair With A Dedicated Agent
 
@@ -131,7 +145,7 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `RC_THREAD_REQUIRE_MENTION` | Require mention in thread follow-ups, default `true` |
 | `RC_NO_THREAD_CHANNELS` | Channels where replies must be unthreaded |
 | `RC_REPLY_TO_MODE` | `off`, `first`, or `all`; default `first` |
-| `RC_PROCESSING_EMOJI_ENABLED` | Enable processing placeholder, default `true` |
+| `RC_PROCESSING_EMOJI_ENABLED` | Enable processing placeholder, default `false` |
 | `RC_PROCESSING_EMOJI_EDIT_DELAY_SECONDS` | Delay before placeholder update |
 | `RC_ATTACHMENT_DOWNLOAD_ENABLED` | Download admitted inbound attachments, default `true` |
 | `RC_ATTACHMENT_MAX_COUNT` | Max attachments per inbound message, default `5` |
