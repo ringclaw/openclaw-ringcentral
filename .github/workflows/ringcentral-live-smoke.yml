@@ -27,6 +27,11 @@ on:
         required: false
         type: boolean
         default: true
+      thread_followup:
+        description: "Run optional threaded follow-up smoke"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   ringcentral-live-smoke:
@@ -43,6 +48,7 @@ jobs:
       RC_E2E_CLEANUP: ${{ github.event_name == 'workflow_dispatch' && inputs.cleanup == true && 'true' || 'false' }}
       RC_E2E_WS_TIMEOUT_MS: ${{ inputs.ws_timeout_ms || '30000' }}
       RC_E2E_FILE_UPLOAD: ${{ github.event_name == 'workflow_dispatch' && inputs.file_upload == false && 'false' || 'true' }}
+      RC_E2E_THREAD_FOLLOWUP: ${{ github.event_name == 'workflow_dispatch' && inputs.thread_followup == true && 'true' || 'false' }}
       RC_E2E_SOURCE_URL: ${{ github.event.pull_request.html_url || format('{0}/{1}/commit/{2}', github.server_url, github.repository, github.sha) }}
       RC_E2E_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       RC_BOT_TOKEN: ${{ secrets.RC_BOT_TOKEN }}

@@ -96,6 +96,14 @@ liveDescribe("RingCentral live smoke", () => {
         createdBotPostIds,
         createdOwnerPostIds,
       });
+      await runThreadFollowupScenario({
+        env,
+        botClient,
+        ownerClient,
+        botExtension,
+        createdBotPostIds,
+        createdOwnerPostIds,
+      });
       await runCalendarEventScenario({
         env,
         ownerClient,
@@ -166,6 +174,7 @@ interface LiveEnv {
   cleanup: boolean;
   wsTimeoutMs: number;
   fileUpload: boolean;
+  threadFollowup: boolean;
 }
 
 interface LiveClients {
@@ -280,6 +289,7 @@ function buildSummaryContext(env: LiveEnv): Record<string, SummaryDetail> {
     record_count: env.recordCount,
     ws_timeout_ms: env.wsTimeoutMs,
     file_upload: env.fileUpload,
+    thread_followup: env.threadFollowup,
   };
 }
 
@@ -293,6 +303,7 @@ function buildBaseSummaryContext(): Record<string, SummaryDetail> {
     record_count: readRecordCount(),
     ws_timeout_ms: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
     file_upload: readBooleanEnv("RC_E2E_FILE_UPLOAD", true),
+    thread_followup: readBooleanEnv("RC_E2E_THREAD_FOLLOWUP", false),
   };
 }
 
@@ -540,6 +551,119 @@ async function runThreadedReplyScenario(
   logSafe("owner_read_thread_reply", { owner_read_found: true, thread_metadata: true });
 }
 
+async function runThreadFollowupScenario(
+  params: LiveClients & {
+    botExtension: ExtensionInfo;
+    createdOwnerPostIds: string[];
+  },
+): Promise<void> {
+  if (!params.env.threadFollowup) {
+    logSafe("thread_followup", { enabled: false });
+    return;
+  }
+
+  const rootText = buildUniqueText("thread-followup-root");
+  const rootReplyText = buildUniqueText("thread-followup-root-reply");
+  const followupText = buildUniqueText("thread-followup-owner");
+  const followupReplyText = buildUniqueText("thread-followup-bot-reply");
+  const wsWaiter = startBotWebSocketWait({
+    botClient: params.botClient,
+    botPersonId: String(params.botExtension.id ?? ""),
+    chatId: params.env.chatId,
+    expectedText: followupText,
+    timeoutMs: params.env.wsTimeoutMs,
+  });
+
+  try {
+    await liveStep("thread_followup_ws_connect", () =>
+      withTimeout(wsWaiter.connected, params.env.wsTimeoutMs, "thread_followup_ws_connect"),
+    );
+
+    const root = await liveStep("thread_root_send", () =>
+      params.ownerClient.sendPost(params.env.chatId, rootText),
+    );
+    assertLive(!!root.id, "thread_root_send");
+    const rootId = String(root.id);
+    params.createdOwnerPostIds.push(rootId);
+    logSafe("thread_root_send", { sent: true });
+
+    const rootReply = await liveStep("bot_thread_root_reply", () =>
+      sendMessage({
+        client: params.botClient,
+        chatId: params.env.chatId,
+        text: rootReplyText,
+        convertMarkdown: false,
+        replyToId: rootId,
+      }),
+    );
+    assertLive(!!rootReply?.postId, "bot_thread_root_reply");
+    params.createdBotPostIds.push(rootReply!.postId);
+    logSafe("bot_thread_root_reply", { sent: true });
+
+    const followup = await liveStep("owner_thread_followup_send", () =>
+      params.ownerClient.sendPost(params.env.chatId, followupText, { parentPostId: rootId }),
+    );
+    assertLive(!!followup.id, "owner_thread_followup_send");
+    params.createdOwnerPostIds.push(String(followup.id));
+    logSafe("owner_thread_followup_send", { sent: true });
+
+    const received = await liveStep("bot_ws_thread_followup_receive", () =>
+      withTimeout(wsWaiter.received, params.env.wsTimeoutMs, "bot_ws_thread_followup_receive"),
+    );
+    assertLive(
+      received.groupId === params.env.chatId &&
+        !!received.text?.includes(followupText) &&
+        hasThreadMetadata(received, rootId),
+      "bot_ws_thread_followup_receive",
+    );
+    logSafe("bot_ws_thread_followup_receive", {
+      ws_received: true,
+      thread_metadata: true,
+    });
+
+    const botRead = await liveStep("bot_read_thread_followup", () =>
+      waitForPost(params.botClient, params.env.chatId, followupText, params.env.recordCount),
+    );
+    assertLive(
+      botRead?.id === followup.id &&
+        !!botRead?.text?.includes(followupText) &&
+        hasThreadMetadata(botRead, rootId),
+      "bot_read_thread_followup",
+    );
+    logSafe("bot_read_thread_followup", { bot_read_found: true, thread_metadata: true });
+
+    const reply = await liveStep("bot_thread_followup_reply", () =>
+      sendMessage({
+        client: params.botClient,
+        chatId: params.env.chatId,
+        text: followupReplyText,
+        convertMarkdown: false,
+        replyToId: String(followup.id),
+        threadId: botRead.threadId ?? rootId,
+      }),
+    );
+    assertLive(!!reply?.postId, "bot_thread_followup_reply");
+    params.createdBotPostIds.push(reply!.postId);
+    logSafe("bot_thread_followup_reply", { sent: true });
+
+    const ownerReadReply = await liveStep("owner_read_thread_followup_reply", () =>
+      waitForPost(params.ownerClient, params.env.chatId, followupReplyText, params.env.recordCount),
+    );
+    assertLive(
+      ownerReadReply?.id === reply?.postId &&
+        !!ownerReadReply?.text?.includes(followupReplyText) &&
+        hasThreadMetadata(ownerReadReply, rootId),
+      "owner_read_thread_followup_reply",
+    );
+    logSafe("owner_read_thread_followup_reply", {
+      owner_read_found: true,
+      thread_metadata: true,
+    });
+  } finally {
+    await wsWaiter.stop();
+  }
+}
+
 async function runCalendarEventScenario(params: {
   env: LiveEnv;
   ownerClient: RingCentralClient;
@@ -658,6 +782,7 @@ function readLiveEnv(): LiveEnv {
     cleanup: readBooleanEnv("RC_E2E_CLEANUP", false),
     wsTimeoutMs: readPositiveIntegerEnv("RC_E2E_WS_TIMEOUT_MS", 30_000, 5_000, 120_000),
     fileUpload: readBooleanEnv("RC_E2E_FILE_UPLOAD", true),
+    threadFollowup: readBooleanEnv("RC_E2E_THREAD_FOLLOWUP", false),
   };
   if (missing.length > 0) {
     throw new Error(`Missing RingCentral live smoke variables: ${missing.join(", ")}`);
