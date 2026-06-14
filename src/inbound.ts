@@ -188,18 +188,11 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     return;
   }
 
-  // Register the inbound post's thread so that future replies in the same
-  // thread are recognised as thread followups even when the user (not the
-  // bot) started or continued the thread. We only register the thread ID /
-  // parent post ID — NOT the inbound post id itself, because the tracker's
-  // has() method is also used by resolveReplyTransport(replyToMode:"first")
-  // to decide whether to attach a parentPostId, and registering the inbound
-  // id would suppress the first threaded reply.
-  if (post.threadId) {
-    tracker.rememberThread(post.threadId);
-  } else if (post.parentPostId) {
-    tracker.rememberThread(post.parentPostId);
-  }
+  // Register the inbound post's thread so future replies in the same thread
+  // are recognised as followups even when the user (not the bot) started it.
+  // Store this as thread/root state only; do not add inbound post ids to the
+  // bot-sent post set used by resolveReplyTransport(replyToMode:"first").
+  tracker.rememberThread(post.threadId ?? post.parentPostId ?? post.id);
 
   const bodyForAgent = stripRcMentions(text, inCtx.botPersonId, {
     preserveNonBotMentions: chatType === "direct" && !!account.ownerCredentials,

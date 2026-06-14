@@ -195,6 +195,48 @@ describe("handleInboundPost", () => {
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
+  it("remembers admitted root posts so later thread replies can skip another mention", async () => {
+    const runtime = makeRuntime();
+    const tracker = new ThreadParticipationTracker();
+    const account = resolveAccount({
+      botToken: "bot",
+      groupPolicy: "open",
+      requireMention: true,
+      threadRequireMention: false,
+      processingPlaceholder: { enabled: false },
+    });
+
+    await handleInboundPost({
+      post: makePost({
+        id: "root-user-post",
+        text: "![:Person](bot) start a thread",
+        mentions: [{ id: "bot", type: "Person" }],
+      }),
+      cfg: {},
+      botClient: makeClient(),
+      account,
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker,
+    });
+
+    await handleInboundPost({
+      post: makePost({
+        id: "followup-post",
+        parentPostId: "root-user-post",
+        text: "follow-up without mention",
+      }),
+      cfg: {},
+      botClient: makeClient(),
+      account,
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker,
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
+  });
+
   it("logs accepted dispatch start, still-pending, and complete diagnostics", async () => {
     vi.useFakeTimers();
     try {
