@@ -43,7 +43,7 @@ export async function sendMessage(opts: SendOptions): Promise<{ postId: string; 
     tracker: opts.tracker,
   });
   const post = await sendPostWithFallback(opts, finalText, transport);
-  opts.tracker?.remember(post.id);
+  opts.tracker?.remember(post.id, threadIdForParticipation(post, transport));
   opts.markOwnPost?.(post.id);
   return { postId: post.id, raw: post };
 }
@@ -61,12 +61,27 @@ async function sendMediaMessage(opts: SendOptions): Promise<{ postId: string; ra
     const contentType = resp.headers.get("content-type") ?? "application/octet-stream";
     const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpg";
     const post = await uploadWithFallback(opts, `image.${ext}`, buf, contentType);
-    opts.tracker?.remember(post.id);
+    const transport = resolveReplyTransport({
+      chatId: opts.chatId,
+      replyToId: opts.replyToId,
+      threadId: opts.threadId,
+      replyToMode: opts.replyToMode ?? "first",
+      noThreadChannels: opts.noThreadChannels,
+      tracker: opts.tracker,
+    });
+    opts.tracker?.remember(post.id, threadIdForParticipation(post, transport));
     opts.markOwnPost?.(post.id);
     return { postId: post.id, raw: post };
   } catch {
     return null;
   }
+}
+
+function threadIdForParticipation(
+  post: { threadId?: string | number | null; parentPostId?: string | number | null },
+  transport: { parentPostId?: string | number; threadId?: string | number },
+): string | number | undefined {
+  return post.threadId ?? transport.threadId ?? transport.parentPostId ?? post.parentPostId ?? undefined;
 }
 
 async function sendPostWithFallback(

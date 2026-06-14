@@ -167,6 +167,79 @@ describe("handleInboundPost", () => {
     expect(drop).toContain('"requireMention":true');
   });
 
+  it("treats tracked RingCentral thread ids as thread follow-ups without another mention", async () => {
+    const runtime = makeRuntime();
+    const tracker = new ThreadParticipationTracker();
+    tracker.remember("bot-reply", "thread-root");
+
+    await handleInboundPost({
+      post: makePost({
+        parentPostId: undefined,
+        threadId: "thread-root",
+        text: "thread follow-up without mention",
+      }),
+      cfg: {},
+      botClient: makeClient(),
+      account: resolveAccount({
+        botToken: "bot",
+        groupPolicy: "open",
+        requireMention: true,
+        threadRequireMention: false,
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker,
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("logs accepted dispatch start, still-pending, and complete diagnostics", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime();
+      const log = vi.fn();
+      let resolveDispatch: ((value: { queuedFinal: boolean; counts: Record<string, never> }) => void) | undefined;
+      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveDispatch = resolve;
+          }),
+      );
+
+      const pending = handleInboundPost({
+        post: makePost({ groupId: "pending-chat", threadId: "thread-root" }),
+        cfg: {},
+        botClient: makeClient(),
+        account: resolveAccount({
+          botToken: "bot",
+          groupPolicy: "open",
+          requireMention: false,
+          processingPlaceholder: { enabled: false },
+        }),
+        botPersonId: "bot",
+        channelRuntime: runtime,
+        tracker: new ThreadParticipationTracker(),
+        log,
+      });
+
+      await vi.waitFor(() => {
+        expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+      });
+      expect(loggedMessages(log).some((message) => message.startsWith("[ringcentral] inbound dispatch start "))).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(loggedMessages(log).some((message) => message.startsWith("[ringcentral] inbound dispatch still_pending "))).toBe(true);
+
+      resolveDispatch?.({ queuedFinal: false, counts: {} });
+      await pending;
+      expect(loggedMessages(log).some((message) => message.startsWith("[ringcentral] inbound dispatch complete "))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not log inbound message text by default", async () => {
     const runtime = makeRuntime();
     const log = vi.fn();
