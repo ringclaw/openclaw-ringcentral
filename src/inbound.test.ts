@@ -394,54 +394,131 @@ describe("handleInboundPost", () => {
     );
   });
 
-  it("onReplyStart posts the typing indicator and onCleanup deletes it; deliver only sends the actual reply", async () => {
+  it("edits the typing emoji once, deletes it before the actual reply, and does not edit it into reply text", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime();
+      const client = makeClient();
+      const log = vi.fn();
+      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
+        await params.dispatcherOptions.onReplyStart();
+        await vi.advanceTimersByTimeAsync(2000);
+        await params.dispatcherOptions.deliver({ text: "final reply" });
+        await params.dispatcherOptions.onCleanup();
+        return { queuedFinal: false, counts: {} };
+      });
+
+      await handleInboundPost({
+        post: makePost({ groupId: "typing-lifecycle-chat" }),
+        cfg: {},
+        botClient: client,
+        account: resolveAccount({
+          botToken: "bot",
+          groupPolicy: "open",
+          requireMention: false,
+        }),
+        botPersonId: "bot",
+        channelRuntime: runtime,
+        tracker: new ThreadParticipationTracker(),
+        log,
+      });
+
+      expect(client.sendPost).toHaveBeenCalledTimes(2);
+      expect(client.sendPost).toHaveBeenNthCalledWith(1, "typing-lifecycle-chat", "\u{1F440}", {
+        parentPostId: "p1",
+      });
+      expect(client.updatePost).toHaveBeenCalledTimes(1);
+      expect(client.updatePost).toHaveBeenCalledWith("typing-lifecycle-chat", "sent-1", "\u{23F3}");
+      expect(client.updatePost).not.toHaveBeenCalledWith(
+        "typing-lifecycle-chat",
+        "sent-1",
+        "final reply",
+      );
+      expect(client.deletePost).toHaveBeenCalledTimes(1);
+      expect(client.deletePost).toHaveBeenCalledWith("typing-lifecycle-chat", "sent-1");
+      expect(client.sendPost).toHaveBeenNthCalledWith(2, "typing-lifecycle-chat", "final reply", {
+        parentPostId: "p1",
+      });
+      expect(client.deletePost.mock.invocationCallOrder[0]).toBeLessThan(
+        client.sendPost.mock.invocationCallOrder[1],
+      );
+
+      const messages = loggedMessages(log);
+      expect(messages.some((m) => m.includes("created typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
+      expect(messages.some((m) => m.includes("deleted typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the delayed edit when cleanup happens before the edit delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime();
+      const client = makeClient();
+      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
+        await params.dispatcherOptions.onReplyStart();
+        await params.dispatcherOptions.onCleanup();
+        await vi.advanceTimersByTimeAsync(2000);
+        return { queuedFinal: false, counts: {} };
+      });
+
+      await handleInboundPost({
+        post: makePost({ groupId: "typing-cleanup-chat" }),
+        cfg: {},
+        botClient: client,
+        account: resolveAccount({
+          botToken: "bot",
+          groupPolicy: "open",
+          requireMention: false,
+        }),
+        botPersonId: "bot",
+        channelRuntime: runtime,
+        tracker: new ThreadParticipationTracker(),
+      });
+
+      expect(client.sendPost).toHaveBeenCalledTimes(1);
+      expect(client.updatePost).not.toHaveBeenCalled();
+      expect(client.deletePost).toHaveBeenCalledWith("typing-cleanup-chat", "sent-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not create, edit, or delete a typing post when the processing placeholder is disabled", async () => {
     const runtime = makeRuntime();
     const client = makeClient();
-    const log = vi.fn();
     runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
       await params.dispatcherOptions.onReplyStart();
-      const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
-      await delivered;
-      // TypingController.cleanup() drives the platform's `onCleanup` after dispatch idle.
+      await params.dispatcherOptions.deliver({ text: "final reply" });
       await params.dispatcherOptions.onCleanup();
       return { queuedFinal: false, counts: {} };
     });
 
     await handleInboundPost({
-      post: makePost({ groupId: "typing-lifecycle-chat" }),
+      post: makePost({ groupId: "typing-disabled-chat" }),
       cfg: {},
       botClient: client,
       account: resolveAccount({
         botToken: "bot",
         groupPolicy: "open",
         requireMention: false,
+        processingPlaceholder: { enabled: false },
       }),
       botPersonId: "bot",
       channelRuntime: runtime,
       tracker: new ThreadParticipationTracker(),
-      log,
     });
 
-    // 1. onReplyStart: post the 👀 once
-    expect(client.sendPost).toHaveBeenCalledTimes(2);
-    expect(client.sendPost).toHaveBeenNthCalledWith(1, "typing-lifecycle-chat", "\u{1F440}", {
+    expect(client.sendPost).toHaveBeenCalledTimes(1);
+    expect(client.sendPost).toHaveBeenCalledWith("typing-disabled-chat", "final reply", {
       parentPostId: "p1",
     });
-    // 2. deliver: send the actual reply, do NOT touch the typing post
     expect(client.updatePost).not.toHaveBeenCalled();
-    expect(client.sendPost).toHaveBeenNthCalledWith(2, "typing-lifecycle-chat", "final reply", {
-      parentPostId: "p1",
-    });
-    // 3. onCleanup: delete the typing post once
-    expect(client.deletePost).toHaveBeenCalledTimes(1);
-    expect(client.deletePost).toHaveBeenCalledWith("typing-lifecycle-chat", "sent-1");
-
-    const messages = loggedMessages(log);
-    expect(messages.some((m) => m.includes("created typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
-    expect(messages.some((m) => m.includes("deleted typing post postId=sent-1 chatId=typing-lifecycle-chat"))).toBe(true);
+    expect(client.deletePost).not.toHaveBeenCalled();
   });
 
-  it("onCleanup retries and warns when deletePost is persistently rejected", async () => {
+  it("deliver retries and warns when deletePost is persistently rejected, then still sends the actual reply", async () => {
     vi.useFakeTimers();
     try {
       const runtime = makeRuntime();
@@ -451,10 +528,9 @@ describe("handleInboundPost", () => {
       runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
         await params.dispatcherOptions.onReplyStart();
         const delivered = params.dispatcherOptions.deliver({ text: "final reply" });
-        await delivered;
-        const cleanup = params.dispatcherOptions.onCleanup();
         await vi.advanceTimersByTimeAsync(250);
-        await cleanup;
+        await delivered;
+        await params.dispatcherOptions.onCleanup();
         return { queuedFinal: false, counts: {} };
       });
 
@@ -475,6 +551,10 @@ describe("handleInboundPost", () => {
 
       // Retry once, then give up; total 2 deletePost calls.
       expect(client.deletePost).toHaveBeenCalledTimes(2);
+      expect(client.sendPost).toHaveBeenCalledTimes(2);
+      expect(client.sendPost).toHaveBeenNthCalledWith(2, "typing-stuck-chat", "final reply", {
+        parentPostId: "p1",
+      });
       const messages = loggedMessages(log);
       expect(messages.some((message) => message.includes("typing post stuck after delete retry"))).toBe(true);
       expect(messages.join("\n")).toContain('"chatId":"typing-stuck-chat"');
