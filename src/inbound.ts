@@ -95,6 +95,9 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       chatType,
       creatorId: senderId,
       text,
+      parentPostId: post.parentPostId,
+      threadId: post.threadId,
+      postId: post.id,
     });
   }
 
@@ -106,6 +109,11 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const routeDescriptors = buildRouteDescriptors({ account, chatId, chatType });
   const groupConfig = account.config.groups?.[chatId];
   const threadFollowup = isTrackedThreadFollowup(post, tracker);
+  if (account.debugInboundMessages && (post.parentPostId || post.threadId)) {
+    log(
+      `[ringcentral] threadFollowup check postId=${post.id} parentPostId=${post.parentPostId ?? "null"} threadId=${post.threadId ?? "null"} threadFollowup=${threadFollowup}`,
+    );
+  }
   const requireMention = resolveRequireMention({
     account,
     chatId,
@@ -179,6 +187,12 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     }
     return;
   }
+
+  // Register the inbound post's thread so future replies in the same thread
+  // are recognised as followups even when the user (not the bot) started it.
+  // Store this as thread/root state only; do not add inbound post ids to the
+  // bot-sent post set used by resolveReplyTransport(replyToMode:"first").
+  tracker.rememberThread(post.threadId ?? post.parentPostId ?? post.id);
 
   const bodyForAgent = stripRcMentions(text, inCtx.botPersonId, {
     preserveNonBotMentions: chatType === "direct" && !!account.ownerCredentials,
@@ -663,6 +677,9 @@ function logInboundMessageDebug(
     creatorId: string;
     chatType: ChatType;
     text: string;
+    parentPostId?: string;
+    threadId?: string;
+    postId?: string;
   },
 ): void {
   log(
@@ -672,6 +689,9 @@ function logInboundMessageDebug(
       chatType: details.chatType,
       textLength: details.text.length,
       text: details.text,
+      postId: details.postId,
+      parentPostId: details.parentPostId,
+      threadId: details.threadId,
     })}`,
   );
 }
