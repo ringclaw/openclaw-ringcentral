@@ -70,6 +70,7 @@ const identity = {
 
 const RC_TYPED_MENTION_RE = /!\[:(?<type>[A-Za-z]+)\]\((?<id>[^)]+)\)/g;
 const RC_LEADING_TYPED_MENTION_RE = /^!\[:(?<type>[A-Za-z]+)\]\((?<id>[^)]+)\)\s*/;
+const TYPING_POST_FAILSAFE_TTL_MS = 2 * 60_000;
 
 const personCache = new Map<string, PersonInfo | null>();
 
@@ -325,11 +326,19 @@ function createDispatcherOptions(params: {
   // start/cleanup lifecycle.
   let typingPostId: string | undefined;
   let typingEditTimer: ReturnType<typeof setTimeout> | undefined;
+  let typingFailsafeTimer: ReturnType<typeof setTimeout> | undefined;
 
   const cancelTypingEdit = () => {
     if (typingEditTimer) {
       clearTimeout(typingEditTimer);
       typingEditTimer = undefined;
+    }
+  };
+
+  const cancelTypingFailsafe = () => {
+    if (typingFailsafeTimer) {
+      clearTimeout(typingFailsafeTimer);
+      typingFailsafeTimer = undefined;
     }
   };
 
@@ -353,6 +362,20 @@ function createDispatcherOptions(params: {
         });
       });
     }, editDelaySeconds * 1000);
+  };
+
+  const scheduleTypingFailsafe = (postId: string) => {
+    cancelTypingFailsafe();
+    typingFailsafeTimer = setTimeout(() => {
+      typingFailsafeTimer = undefined;
+      if (typingPostId !== postId) {
+        return;
+      }
+      params.log(
+        `[ringcentral] typing post failsafe cleanup postId=${postId} chatId=${params.chatId}`,
+      );
+      void clearTypingPost();
+    }, TYPING_POST_FAILSAFE_TTL_MS);
   };
 
   const startTypingPost = async () => {
@@ -379,11 +402,13 @@ function createDispatcherOptions(params: {
         `[ringcentral] created typing post postId=${newId} chatId=${params.chatId}`,
       );
       scheduleTypingEdit();
+      scheduleTypingFailsafe(newId);
     }
   };
 
   const clearTypingPost = async () => {
     cancelTypingEdit();
+    cancelTypingFailsafe();
     if (!typingPostId) {
       return;
     }

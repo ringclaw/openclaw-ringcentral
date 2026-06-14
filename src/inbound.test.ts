@@ -485,6 +485,46 @@ describe("handleInboundPost", () => {
     }
   });
 
+  it("failsafe deletes the typing post when the dispatcher never delivers or cleans up", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime();
+      const client = makeClient();
+      const log = vi.fn();
+      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params: any) => {
+        await params.dispatcherOptions.onReplyStart();
+        await vi.advanceTimersByTimeAsync(120_000);
+        return { queuedFinal: false, counts: {} };
+      });
+
+      await handleInboundPost({
+        post: makePost({ groupId: "typing-failsafe-chat" }),
+        cfg: {},
+        botClient: client,
+        account: resolveAccount({
+          botToken: "bot",
+          groupPolicy: "open",
+          requireMention: false,
+        }),
+        botPersonId: "bot",
+        channelRuntime: runtime,
+        tracker: new ThreadParticipationTracker(),
+        log,
+      });
+
+      expect(client.sendPost).toHaveBeenCalledTimes(1);
+      expect(client.updatePost).toHaveBeenCalledWith("typing-failsafe-chat", "sent-1", "\u{23F3}");
+      expect(client.deletePost).toHaveBeenCalledTimes(1);
+      expect(client.deletePost).toHaveBeenCalledWith("typing-failsafe-chat", "sent-1");
+
+      const messages = loggedMessages(log);
+      expect(messages.some((message) => message.includes("typing post failsafe cleanup postId=sent-1 chatId=typing-failsafe-chat"))).toBe(true);
+      expect(messages.some((message) => message.includes("deleted typing post postId=sent-1 chatId=typing-failsafe-chat"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not create, edit, or delete a typing post when the processing placeholder is disabled", async () => {
     const runtime = makeRuntime();
     const client = makeClient();
