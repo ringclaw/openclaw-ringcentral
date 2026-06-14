@@ -216,7 +216,7 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `groups.<chatId>.requireMention` | inherited | Per-group mention gate |
 | `groups.<chatId>.users` | `[]` | Per-group sender allowlist |
 | `groups.<chatId>.systemPrompt` | — | Per-group system prompt override |
-| `dm.policy` | `open` | `disabled`, `allowlist`, `pairing`, or `open` |
+| `dm.policy` | contextual | Bot-only defaults to `open`; owner credentials default to owner-only `allowlist` unless explicitly configured |
 | `dm.allowFrom` | `[]` | Stable sender IDs allowed in DMs |
 | `replyToMode` | `first` | Threading behavior for replies (`off`, `first`, `all`) |
 | `noThreadChannels` | `[]` | Chat IDs that force unthreaded sends |
@@ -232,7 +232,7 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `allowBots` | `false` | Allow bot-authored inbound messages |
 | `botExtensionId` | — | Override bot person ID (auto-detected if omitted) |
 | `textChunkLimit` | — | Max text length per message before chunking |
-| `historyMessageLimit` | `50` | Default history record count (max `1000`) |
+| `historyMessageLimit` | `250` | Default history record count (max `1000`) |
 | `homeChannel` | — | Default history/home chat ID |
 
 When owner credentials are configured and no explicit DM allowlist is provided, the effective default is owner-only unless `allowAllUsers` is enabled.
