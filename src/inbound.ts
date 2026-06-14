@@ -71,6 +71,7 @@ const identity = {
 const RC_TYPED_MENTION_RE = /!\[:(?<type>[A-Za-z]+)\]\((?<id>[^)]+)\)/g;
 const RC_LEADING_TYPED_MENTION_RE = /^!\[:(?<type>[A-Za-z]+)\]\((?<id>[^)]+)\)\s*/;
 const TYPING_POST_FAILSAFE_TTL_MS = 2 * 60_000;
+const DISPATCH_START_WARN_MS = 5_000;
 
 const personCache = new Map<string, PersonInfo | null>();
 
@@ -104,7 +105,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   });
   const routeDescriptors = buildRouteDescriptors({ account, chatId, chatType });
   const groupConfig = account.config.groups?.[chatId];
-  const threadFollowup = !!post.parentPostId && tracker.has(post.parentPostId);
+  const threadFollowup = isTrackedThreadFollowup(post, tracker);
   const requireMention = resolveRequireMention({
     account,
     chatId,
@@ -247,21 +248,66 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     ...mediaPayload,
   });
 
-  await dispatchReplyWithBufferedBlockDispatcher({
-    ctx: context,
-    cfg,
-    dispatcherOptions: createDispatcherOptions({
-      botClient,
-      ownerClient,
-      account,
+  const dispatchWarnTimer = setTimeout(() => {
+    logInboundDispatchDiagnostic(log, "still_pending", {
       chatId,
-      sourcePostId: post.id,
-      sourceThreadId: post.threadId,
-      tracker,
-      markOwnPost: inCtx.markOwnPost,
-      log,
-    }),
+      postId: post.id,
+      parentPostId: post.parentPostId,
+      threadId: post.threadId,
+      routeSessionKey: route.sessionKey,
+    });
+  }, DISPATCH_START_WARN_MS);
+  dispatchWarnTimer.unref?.();
+  logInboundDispatchDiagnostic(log, "start", {
+    chatId,
+    postId: post.id,
+    parentPostId: post.parentPostId,
+    threadId: post.threadId,
+    routeSessionKey: route.sessionKey,
   });
+  try {
+    await dispatchReplyWithBufferedBlockDispatcher({
+      ctx: context,
+      cfg,
+      dispatcherOptions: createDispatcherOptions({
+        botClient,
+        ownerClient,
+        account,
+        chatId,
+        sourcePostId: post.id,
+        sourceThreadId: post.threadId,
+        tracker,
+        markOwnPost: inCtx.markOwnPost,
+        log,
+      }),
+    });
+    logInboundDispatchDiagnostic(log, "complete", {
+      chatId,
+      postId: post.id,
+      parentPostId: post.parentPostId,
+      threadId: post.threadId,
+      routeSessionKey: route.sessionKey,
+    });
+  } catch (err) {
+    logInboundDispatchDiagnostic(log, "failed", {
+      chatId,
+      postId: post.id,
+      parentPostId: post.parentPostId,
+      threadId: post.threadId,
+      routeSessionKey: route.sessionKey,
+      error: formatTypingPostError(err),
+    });
+    throw err;
+  } finally {
+    clearTimeout(dispatchWarnTimer);
+  }
+}
+
+function isTrackedThreadFollowup(post: Post, tracker: ThreadParticipationTracker): boolean {
+  return Boolean(
+    (post.parentPostId && (tracker.has(post.parentPostId) || tracker.hasThread(post.parentPostId))) ||
+      (post.threadId && tracker.hasThread(post.threadId)),
+  );
 }
 
 export function stripRcMentions(
@@ -681,6 +727,30 @@ function logFirstInboundDropWarning(
       requireMention: details.requireMention,
       textLength: details.textLength,
       debugHint: "set debugInboundMessages=true for message text and drop details",
+    })}`,
+  );
+}
+
+function logInboundDispatchDiagnostic(
+  log: (message: string) => void,
+  event: "start" | "still_pending" | "complete" | "failed",
+  details: {
+    chatId: string;
+    postId: string;
+    parentPostId?: string;
+    threadId?: string;
+    routeSessionKey: string;
+    error?: string;
+  },
+): void {
+  log(
+    `[ringcentral] inbound dispatch ${event} ${JSON.stringify({
+      chatId: details.chatId,
+      postId: details.postId,
+      parentPostId: details.parentPostId,
+      threadId: details.threadId,
+      routeSessionKey: details.routeSessionKey,
+      error: details.error,
     })}`,
   );
 }

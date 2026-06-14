@@ -2,15 +2,32 @@ import type { RingCentralReplyToMode } from "./types.js";
 
 export class ThreadParticipationTracker {
   private readonly sentPostIds = new Set<string>();
+  private readonly threadIds = new Set<string>();
 
-  remember(postId: string | undefined | null): void {
+  remember(
+    postId: string | undefined | null,
+    threadId?: string | number | undefined | null,
+  ): void {
     if (postId) {
-      this.sentPostIds.add(postId);
+      this.sentPostIds.add(String(postId));
+    }
+    if (threadId) {
+      this.threadIds.add(String(threadId));
     }
   }
 
-  has(postId: string | undefined | null): boolean {
-    return !!postId && this.sentPostIds.has(postId);
+  rememberThread(threadId: string | number | undefined | null): void {
+    if (threadId) {
+      this.threadIds.add(String(threadId));
+    }
+  }
+
+  has(postId: string | number | undefined | null): boolean {
+    return !!postId && this.sentPostIds.has(String(postId));
+  }
+
+  hasThread(threadId: string | number | undefined | null): boolean {
+    return !!threadId && this.threadIds.has(String(threadId));
   }
 }
 
