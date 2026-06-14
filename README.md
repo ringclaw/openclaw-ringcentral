@@ -29,10 +29,12 @@ manual development outside the OpenClaw plugin manager.
 - Optional owner JWT credentials for owner-observed groups, history reads, and fallback sends
 - OpenClaw channel ingress policy for DM/group allowlists, pairing, mention gates, and ignored/allowed channels
 - Threaded replies with `off`, `first`, and `all` modes
+- Thread follow-up detection: once the bot participates in a thread, subsequent messages in that thread can skip the mention requirement (controlled by `threadRequireMention`)
 - Inbound file/image attachments are downloaded into OpenClaw managed media storage after admission
 - Optional opt-in processing placeholder while an agent run is active
 - Shared OpenClaw `message` actions for send/read/edit/delete/channel-info
 - Optional `ringcentral_get_recent_messages` agent tool
+- Dispatch lifecycle diagnostics (`debugInboundMessages`) for troubleshooting silent message drops
 
 ## Configuration
 
@@ -70,21 +72,69 @@ Owner credentials for history/fallback:
 }
 ```
 
-`credentials` is still accepted as a deprecated config alias for `ownerCredentials`.
+`credentials` is still accepted as a deprecated alias for `ownerCredentials`.
 
-Opt in to the emoji processing placeholder:
+Group allowlist with per-group mention gate and thread follow-up:
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "enabled": true,
+      "botToken": "your-bot-static-token",
+      "groupPolicy": "allowlist",
+      "requireMention": true,
+      "threadRequireMention": false,
+      "groups": {
+        "123456789": {
+          "enabled": true,
+          "requireMention": true,
+          "users": ["sender-id-1", "sender-id-2"]
+        }
+      }
+    }
+  }
+}
+```
+
+When `threadRequireMention` is `false`, replies inside a thread the bot has
+already participated in do not need a new mention to activate the bot.
+Default is `true` (every message in a thread needs a mention).
+
+Opt in to the processing placeholder (shown while an agent run is active):
 
 ```json
 {
   "channels": {
     "ringcentral": {
       "processingPlaceholder": {
-        "enabled": true
+        "enabled": true,
+        "initialText": "👀",
+        "delayedText": "⏳",
+        "editDelaySeconds": 2
       }
     }
   }
 }
 ```
+
+DM policy and sender allowlist:
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "dm": {
+        "policy": "allowlist",
+        "allowFrom": ["sender-id-1"]
+      }
+    }
+  }
+}
+```
+
+`dm.policy` can be `disabled` (default for group-only deployments), `allowlist`,
+`pairing`, or `open`.
 
 ## Pair With A Dedicated Agent
 
@@ -141,12 +191,13 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `RC_ALLOWED_CHANNELS` | Comma-separated chat IDs allowed for group/channel ingress |
 | `RC_IGNORED_CHANNELS` | Comma-separated chat IDs ignored for ingress |
 | `RC_REQUIRE_MENTION` | Require mention in groups, default `true` |
-| `RC_FREE_RESPONSE_CHANNELS` | Channels that do not require mentions |
 | `RC_THREAD_REQUIRE_MENTION` | Require mention in thread follow-ups, default `true` |
+| `RC_FREE_RESPONSE_CHANNELS` | Channels that do not require mentions |
 | `RC_NO_THREAD_CHANNELS` | Channels where replies must be unthreaded |
 | `RC_REPLY_TO_MODE` | `off`, `first`, or `all`; default `first` |
 | `RC_PROCESSING_EMOJI_ENABLED` | Enable processing placeholder, default `false` |
 | `RC_PROCESSING_EMOJI_EDIT_DELAY_SECONDS` | Delay before placeholder update |
+| `RC_DEBUG_INBOUND_MESSAGES` | Log detailed inbound message metadata (postId, parentPostId, threadId), default `false` |
 | `RC_ATTACHMENT_DOWNLOAD_ENABLED` | Download admitted inbound attachments, default `true` |
 | `RC_ATTACHMENT_MAX_COUNT` | Max attachments per inbound message, default `5` |
 | `RC_ATTACHMENT_MAX_BYTES` | Max bytes per downloaded attachment, default `5242880` |
@@ -159,17 +210,30 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | Option | Default | Description |
 | --- | --- | --- |
 | `groupPolicy` | `disabled` | `disabled`, `allowlist`, or `open` |
+| `requireMention` | `true` | Require mention in group messages |
+| `threadRequireMention` | `true` | Require mention in thread follow-ups (set `false` to allow follow-up replies without mention) |
 | `groups.<chatId>.enabled` | `true` | Enable an allowlisted group |
 | `groups.<chatId>.requireMention` | inherited | Per-group mention gate |
 | `groups.<chatId>.users` | `[]` | Per-group sender allowlist |
-| `dm.policy` | `open` | `disabled`, `allowlist`, `pairing`, or `open` |
+| `groups.<chatId>.systemPrompt` | — | Per-group system prompt override |
+| `dm.policy` | contextual | Bot-only defaults to `open`; owner credentials default to owner-only `allowlist` unless explicitly configured |
 | `dm.allowFrom` | `[]` | Stable sender IDs allowed in DMs |
-| `replyToMode` | `first` | Threading behavior for replies |
+| `replyToMode` | `first` | Threading behavior for replies (`off`, `first`, `all`) |
 | `noThreadChannels` | `[]` | Chat IDs that force unthreaded sends |
+| `freeResponseChannels` | `[]` | Chat IDs that do not require mentions |
+| `processingPlaceholder.enabled` | `false` | Show emoji placeholder while agent is processing |
+| `processingPlaceholder.initialText` | `👀` | Initial placeholder text |
+| `processingPlaceholder.delayedText` | `⏳` | Text shown after edit delay |
+| `processingPlaceholder.editDelaySeconds` | `2` | Seconds before switching to `delayedText` |
 | `attachments.enabled` | `true` | Download admitted RingCentral file/image attachments |
 | `attachments.maxCount` | `5` | Max attachments to process per inbound message |
 | `attachments.maxBytes` | `5242880` | Max bytes per downloaded attachment |
+| `debugInboundMessages` | `false` | Log detailed inbound message metadata (postId, parentPostId, threadId) |
 | `allowBots` | `false` | Allow bot-authored inbound messages |
+| `botExtensionId` | — | Override bot person ID (auto-detected if omitted) |
+| `textChunkLimit` | — | Max text length per message before chunking |
+| `historyMessageLimit` | `250` | Default history record count (max `1000`) |
+| `homeChannel` | — | Default history/home chat ID |
 
 When owner credentials are configured and no explicit DM allowlist is provided, the effective default is owner-only unless `allowAllUsers` is enabled.
 
