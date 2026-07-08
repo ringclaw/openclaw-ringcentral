@@ -379,15 +379,15 @@ describe("ringCentralMessageActions", () => {
   });
 
   it("extracts send target for shared send action", () => {
-    expect(ringCentralMessageActions.extractToolSend?.({ args: { action: "send", to: "ringcentral:group:g1" } })).toEqual({
-      to: "ringcentral:group:g1",
+    expect(ringCentralMessageActions.extractToolSend?.({ args: { action: "send", to: "team:g1" } })).toEqual({
+      to: "team:g1",
     });
   });
 
   it("routes shared read action", async () => {
     await ringCentralMessageActions.handleAction?.({
       action: "read",
-      params: { to: "ringcentral:group:c1", count: 5 },
+      params: { to: "team:c1", count: 5 },
       cfg,
     } as any);
     expect(actions.actionReadMessages).toHaveBeenCalledWith(expect.anything(), "c1", 5);

@@ -1,34 +1,39 @@
 // Target ID normalization for RingCentral.
-// Format: rc:{kind}:{id} where kind is dm, group, channel, user, chat
+// Canonical format follows OpenClaw message targets:
+// user:<personId>, team:<chatId>, group:<chatId>, or channel:<chatId>.
 
-export const RC_PREFIX = "ringcentral";
+export type RingCentralTargetKind = "user" | "team" | "group" | "channel";
 
-export function parseTarget(raw: string): { kind: string; id: string } | null {
-  // ringcentral:dm:123 or ringcentral:group:123 or rc:chat:123
-  const prefixes = [`${RC_PREFIX}:`, "rc:"];
-  for (const prefix of prefixes) {
-    if (raw.startsWith(prefix)) {
-      const rest = raw.slice(prefix.length);
-      const colonIdx = rest.indexOf(":");
-      if (colonIdx > 0) {
-        return { kind: rest.slice(0, colonIdx), id: rest.slice(colonIdx + 1) };
-      }
-      return { kind: "chat", id: rest };
-    }
+const TARGET_KINDS = new Set<string>(["user", "team", "group", "channel"]);
+
+export function parseTarget(raw: string): { kind: RingCentralTargetKind; id: string } | null {
+  const target = raw.trim();
+  if (target.startsWith("ringcentral:") || target.startsWith("rc:")) {
+    return null;
   }
-  // Bare numeric ID
-  if (/^\d+$/.test(raw)) {
-    return { kind: "chat", id: raw };
+  const colonIdx = target.indexOf(":");
+  if (colonIdx <= 0) {
+    return null;
   }
-  return null;
+  const kind = target.slice(0, colonIdx);
+  const id = target.slice(colonIdx + 1).trim();
+  return TARGET_KINDS.has(kind) && id ? { kind: kind as RingCentralTargetKind, id } : null;
 }
 
-export function buildTarget(kind: string, id: string): string {
-  return `${RC_PREFIX}:${kind}:${id}`;
+export function buildTarget(kind: RingCentralTargetKind, id: string): string {
+  return `${kind}:${id}`;
 }
 
 export function buildDmTarget(userId: string): string {
-  return buildTarget("dm", userId);
+  return buildTarget("user", userId);
+}
+
+export function buildUserTarget(userId: string): string {
+  return buildTarget("user", userId);
+}
+
+export function buildTeamTarget(chatId: string): string {
+  return buildTarget("team", chatId);
 }
 
 export function buildGroupTarget(chatId: string): string {
@@ -41,7 +46,11 @@ export function buildChannelTarget(chatId: string): string {
 
 export function extractChatId(target: string): string | null {
   const parsed = parseTarget(target);
-  return parsed?.id ?? null;
+  return parsed && parsed.kind !== "user" ? parsed.id : null;
+}
+
+export function extractTargetId(target: string): string | null {
+  return parseTarget(target)?.id ?? null;
 }
 
 export function normalizeTarget(raw: string): string | undefined {

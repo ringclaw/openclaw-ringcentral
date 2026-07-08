@@ -8,11 +8,33 @@ import { resolveInboundAttachmentsForAgent } from "./attachments.js";
 import { RingCentralApiError, type RingCentralClient } from "./client.js";
 import { sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
-import { buildChannelTarget, buildDmTarget, buildGroupTarget } from "./targets.js";
-import { channelSetMatches, type ThreadParticipationTracker } from "./threading.js";
-import type { Chat, PersonInfo, Post, ResolvedAccount } from "./types.js";
+import { buildChannelTarget, buildGroupTarget, buildTeamTarget, buildUserTarget } from "./targets.js";
+import type { ThreadParticipationTracker } from "./threading.js";
+import type { Chat, PersonInfo, Post, ResolvedAccount, RingCentralGroupDmConfig, RingCentralTeamConfig } from "./types.js";
 
 type ChatType = "direct" | "group" | "channel";
+type ChatSurface =
+  | {
+      kind: "direct";
+      chatType: "direct";
+      targetKind: "user";
+      settings?: undefined;
+      groupPolicy: "disabled" | "allowlist" | "open";
+    }
+  | {
+      kind: "group-dm";
+      chatType: "group";
+      targetKind: "group";
+      settings?: RingCentralGroupDmConfig;
+      groupPolicy: "disabled" | "allowlist" | "open";
+    }
+  | {
+      kind: "team";
+      chatType: "channel";
+      targetKind: "team" | "channel";
+      settings?: RingCentralTeamConfig;
+      groupPolicy: "disabled" | "allowlist" | "open";
+    };
 type ResolveAgentRoute = typeof import("openclaw/plugin-sdk/routing")["resolveAgentRoute"];
 type FinalizeInboundContext =
   typeof import("openclaw/plugin-sdk/reply-runtime")["finalizeInboundContext"];
@@ -82,7 +104,8 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const text = post.text ?? "";
   const senderId = post.creatorId;
   const chat = await getChatSafe(botClient, chatId);
-  const chatType = classifyChat(chat);
+  const surface = classifyChatSurface(chat, account, chatId);
+  const chatType = surface.chatType;
   const sender = await getPersonSafe(ownerClient ?? botClient, senderId);
 
   if (!account.config.allowBots && inCtx.botPersonId && senderId === inCtx.botPersonId) {
@@ -106,8 +129,8 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     mentions: post.mentions,
     botPersonId: inCtx.botPersonId,
   });
-  const routeDescriptors = buildRouteDescriptors({ account, chatId, chatType });
-  const groupConfig = account.config.groups?.[chatId];
+  const routeDescriptors = buildRouteDescriptors({ account, chatId, surface });
+  const surfaceConfig = surface.settings;
   const threadFollowup = isTrackedThreadFollowup(post, tracker);
   if (account.debugInboundMessages && (post.parentPostId || post.threadId)) {
     log(
@@ -117,15 +140,13 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const requireMention = resolveRequireMention({
     account,
     chatId,
-    chatType,
-    groupConfigRequireMention: groupConfig?.requireMention,
+    surface,
+    surfaceRequireMention: surfaceConfig?.requireMention,
     threadFollowup,
   });
-  const allowFrom = buildAllowFrom({
-    account,
-    ownerPersonId: inCtx.ownerPersonId,
-  });
-  const groupAllowFrom = groupConfig?.users ?? [];
+  const allowFrom = buildAllowFrom(account);
+  const groupAllowFrom =
+    chatType === "direct" ? [] : surfaceConfig?.users?.length ? surfaceConfig.users : ["*"];
 
   const ingressRuntime = await import("openclaw/plugin-sdk/channel-ingress-runtime");
   const ingress = await ingressRuntime.resolveChannelMessageIngress({
@@ -139,10 +160,10 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     conversation: { kind: chatType, id: chatId },
     event: { kind: "message", authMode: "inbound", mayPair: chatType === "direct" },
     policy: {
-      dmPolicy: account.allowAllUsers ? "open" : account.dmPolicy,
-      groupPolicy: account.groupPolicy,
+      dmPolicy: account.dmPolicy,
+      groupPolicy: surface.groupPolicy,
       groupAllowFromFallbackToAllowFrom: true,
-      mutableIdentifierMatching: "enabled",
+      mutableIdentifierMatching: account.dangerouslyAllowEmailMatching ? "enabled" : "disabled",
       activation: {
         requireMention,
         allowTextCommands: true,
@@ -168,8 +189,8 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       logInboundDropDebug(log, {
         chatId,
         chatType,
-        groupConfigRequireMention: groupConfig?.requireMention,
-        groupPolicy: account.groupPolicy,
+        surfaceConfigRequireMention: surfaceConfig?.requireMention,
+        groupPolicy: surface.groupPolicy,
         reasonCode: ingress.ingress.reasonCode,
         requireMention,
         textLength: text.length,
@@ -178,8 +199,8 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       logFirstInboundDropWarning(log, {
         chatId,
         chatType,
-        groupConfigRequireMention: groupConfig?.requireMention,
-        groupPolicy: account.groupPolicy,
+        surfaceConfigRequireMention: surfaceConfig?.requireMention,
+        groupPolicy: surface.groupPolicy,
         reasonCode: ingress.ingress.reasonCode,
         requireMention,
         textLength: text.length,
@@ -222,7 +243,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       accountId: "default",
       peer,
     });
-  const target = buildInboundTarget({ chatType, chatId, senderId });
+  const target = buildInboundTarget({ surface, chatId, senderId });
   const fallbackReplyRuntime =
     runtime.reply?.finalizeInboundContext && runtime.reply?.dispatchReplyWithBufferedBlockDispatcher
       ? null
@@ -249,7 +270,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     ChatType: chatType,
     ConversationLabel: chat?.name ?? chatId,
     GroupChannel: chatType !== "direct" ? chatId : undefined,
-    GroupSystemPrompt: groupConfig?.systemPrompt,
+    GroupSystemPrompt: surfaceConfig?.systemPrompt,
     SenderId: senderId,
     SenderName: formatPersonName(sender),
     Timestamp: Date.parse(post.creationTime) || Date.now(),
@@ -603,53 +624,71 @@ async function sendReplyText(
   });
 }
 
-function buildAllowFrom(params: {
-  account: ResolvedAccount;
-  ownerPersonId?: string;
-}): Array<string | number> {
-  if (params.account.allowAllUsers) {
-    return ["*"];
-  }
-  const entries = [
-    ...(params.account.config.dm?.allowFrom ?? []),
-    ...params.account.allowedUserEmails,
-    ...(params.ownerPersonId ? [params.ownerPersonId] : []),
-  ];
-  return Array.from(new Set(entries.map((entry) => String(entry).trim()).filter(Boolean)));
+function buildAllowFrom(account: ResolvedAccount): Array<string | number> {
+  return account.allowFrom;
 }
 
 function buildRouteDescriptors(params: {
   account: ResolvedAccount;
   chatId: string;
-  chatType: ChatType;
+  surface: ChatSurface;
 }): ChannelIngressRouteDescriptor[] {
   const routes: ChannelIngressRouteDescriptor[] = [];
-  if (channelSetMatches(params.account.ignoredChannels, params.chatId)) {
+  if (params.surface.kind === "group-dm") {
+    if (!params.account.groupDmEnabled) {
+      routes.push({
+        id: `ringcentral:group-dm:${params.chatId}`,
+        configured: false,
+        matched: true,
+        allowed: false,
+        blockReason: "group dm disabled",
+      });
+      return routes;
+    }
     routes.push({
-      id: `ringcentral:ignored:${params.chatId}`,
+      id: `ringcentral:group-dm:${params.chatId}`,
+      configured: !!params.surface.settings,
+      matched: true,
+      allowed: !!params.surface.settings && params.surface.settings.allow !== false,
+      blockReason: "group dm not allowlisted",
+    });
+    return routes;
+  }
+
+  if (params.surface.kind !== "team") {
+    return routes;
+  }
+
+  const explicitTeamConfig = params.account.config.teams?.[params.chatId];
+  if (explicitTeamConfig?.allow === false) {
+    routes.push({
+      id: `ringcentral:team:${params.chatId}`,
       configured: true,
       matched: true,
       allowed: false,
-      blockReason: "ignored channel",
+      blockReason: "team disabled",
     });
+    return routes;
   }
-  if (params.account.allowedChannels.length > 0) {
+
+  if (params.account.groupPolicy === "allowlist") {
     routes.push({
-      id: `ringcentral:allowed:${params.chatId}`,
+      id: `ringcentral:team:${params.chatId}`,
       configured: true,
-      matched: channelSetMatches(params.account.allowedChannels, params.chatId),
-      allowed: channelSetMatches(params.account.allowedChannels, params.chatId),
-      blockReason: "channel not allowlisted",
-    });
-  }
-  if (params.chatType !== "direct" && params.account.groupPolicy === "allowlist") {
-    const groupConfig = params.account.config.groups?.[params.chatId];
-    routes.push({
-      id: `ringcentral:group:${params.chatId}`,
-      configured: !!groupConfig,
       matched: true,
-      allowed: !!groupConfig && groupConfig.enabled !== false,
-      blockReason: "group not allowlisted",
+      allowed: explicitTeamConfig !== undefined,
+      blockReason: "team not allowlisted",
+    });
+    return routes;
+  }
+
+  if (params.account.groupPolicy === "disabled") {
+    routes.push({
+      id: `ringcentral:team:${params.chatId}`,
+      configured: false,
+      matched: true,
+      allowed: false,
+      blockReason: "team policy disabled",
     });
   }
   return routes;
@@ -701,7 +740,7 @@ function logInboundDropDebug(
   details: {
     chatId: string;
     chatType: ChatType;
-    groupConfigRequireMention?: boolean;
+    surfaceConfigRequireMention?: boolean;
     groupPolicy: string;
     reasonCode: string;
     requireMention: boolean;
@@ -712,7 +751,7 @@ function logInboundDropDebug(
     `[ringcentral] inbound message dropped ${JSON.stringify({
       chatId: details.chatId,
       chatType: details.chatType,
-      groupConfigRequireMention: details.groupConfigRequireMention,
+      surfaceConfigRequireMention: details.surfaceConfigRequireMention,
       groupPolicy: details.groupPolicy,
       reasonCode: details.reasonCode,
       requireMention: details.requireMention,
@@ -726,7 +765,7 @@ function logFirstInboundDropWarning(
   details: {
     chatId: string;
     chatType: ChatType;
-    groupConfigRequireMention?: boolean;
+    surfaceConfigRequireMention?: boolean;
     groupPolicy: string;
     reasonCode: string;
     requireMention: boolean;
@@ -741,7 +780,7 @@ function logFirstInboundDropWarning(
     `[ringcentral] WARN inbound message dropped ${JSON.stringify({
       chatId: details.chatId,
       chatType: details.chatType,
-      groupConfigRequireMention: details.groupConfigRequireMention,
+      surfaceConfigRequireMention: details.surfaceConfigRequireMention,
       groupPolicy: details.groupPolicy,
       reasonCode: details.reasonCode,
       requireMention: details.requireMention,
@@ -778,26 +817,23 @@ function logInboundDispatchDiagnostic(
 function resolveRequireMention(params: {
   account: ResolvedAccount;
   chatId: string;
-  chatType: ChatType;
-  groupConfigRequireMention?: boolean;
+  surface: ChatSurface;
+  surfaceRequireMention?: boolean;
   threadFollowup: boolean;
 }): boolean {
-  if (params.chatType === "direct") {
+  if (params.surface.kind === "direct") {
     return false;
   }
-  if (
-    channelSetMatches(params.account.freeResponseChannels, params.chatId) ||
-    (params.threadFollowup && !params.account.threadRequireMention)
-  ) {
+  if (params.threadFollowup && !params.account.threadRequireMention) {
     return false;
   }
-  if (params.groupConfigRequireMention !== undefined) {
-    return params.groupConfigRequireMention;
+  if (params.surfaceRequireMention !== undefined) {
+    return params.surfaceRequireMention;
   }
   if (params.account.requireMentionExplicit) {
     return params.account.requireMention;
   }
-  return params.account.groupPolicy === "open" ? false : params.account.requireMention;
+  return params.surface.kind === "team";
 }
 
 async function getChatSafe(client: RingCentralClient, chatId: string): Promise<Chat | null> {
@@ -825,21 +861,57 @@ async function getPersonSafe(
   }
 }
 
-function classifyChat(chat: Chat | null): ChatType {
-  if (chat?.type === "Group" || chat?.type === "Team") {
-    return "group";
+function classifyChatSurface(
+  chat: Chat | null,
+  account: ResolvedAccount,
+  chatId: string,
+): ChatSurface {
+  if (chat?.type === "Direct" || chat?.type === "Personal") {
+    return {
+      kind: "direct",
+      chatType: "direct",
+      targetKind: "user",
+      groupPolicy: "disabled",
+    };
   }
-  if (chat?.type === "Everyone") {
-    return "channel";
+  if (chat?.type === "Team" || chat?.type === "Everyone") {
+    return {
+      kind: "team",
+      chatType: "channel",
+      targetKind: chat.type === "Team" ? "team" : "channel",
+      settings: resolveTeamSettings(account, chatId),
+      groupPolicy: account.groupPolicy,
+    };
   }
-  return "direct";
+  return {
+    kind: "group-dm",
+    chatType: "group",
+    targetKind: "group",
+    settings: account.groupDmChannels[chatId],
+    groupPolicy: account.groupDmEnabled ? "allowlist" : "disabled",
+  };
 }
 
-function buildInboundTarget(params: { chatType: ChatType; chatId: string; senderId: string }): string {
-  if (params.chatType === "direct") {
-    return buildDmTarget(params.senderId);
+function resolveTeamSettings(
+  account: ResolvedAccount,
+  chatId: string,
+): RingCentralTeamConfig | undefined {
+  const defaults = account.config.teams?.["*"];
+  const explicit = account.config.teams?.[chatId];
+  if (!defaults) {
+    return explicit;
   }
-  if (params.chatType === "channel") {
+  return explicit ? { ...defaults, ...explicit } : defaults;
+}
+
+function buildInboundTarget(params: { surface: ChatSurface; chatId: string; senderId: string }): string {
+  if (params.surface.targetKind === "user") {
+    return buildUserTarget(params.senderId);
+  }
+  if (params.surface.targetKind === "team") {
+    return buildTeamTarget(params.chatId);
+  }
+  if (params.surface.targetKind === "channel") {
     return buildChannelTarget(params.chatId);
   }
   return buildGroupTarget(params.chatId);

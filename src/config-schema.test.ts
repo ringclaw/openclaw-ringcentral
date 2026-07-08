@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ringCentralConfigSchema } from "./config-schema.js";
 
 describe("ringCentralConfigSchema", () => {
@@ -12,7 +12,7 @@ describe("ringCentralConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts full config", () => {
+  it("accepts full canonical config", () => {
     const result = ringCentralConfigSchema.safeParse({
       enabled: true,
       name: "My Bot",
@@ -22,11 +22,20 @@ describe("ringCentralConfigSchema", () => {
       server: "https://platform.ringcentral.com",
       botExtensionId: "12345",
       selfOnly: false,
-      allowedUserEmails: ["owner@example.com"],
-      allowAllUsers: false,
-      allowedChannels: ["g1"],
-      ignoredChannels: ["g2"],
-      freeResponseChannels: ["g3"],
+      dmPolicy: "allowlist",
+      allowFrom: ["u1", 99],
+      dangerouslyAllowEmailMatching: false,
+      groupPolicy: "allowlist",
+      teams: {
+        "*": { requireMention: true },
+        "123": { allow: true, requireMention: true, systemPrompt: "Be helpful", users: ["u1", 42] },
+      },
+      dm: {
+        groupEnabled: true,
+        groupChannels: {
+          "g1": { allow: true, requireMention: false, users: ["u1"] },
+        },
+      },
       threadRequireMention: true,
       noThreadChannels: ["g4"],
       replyToMode: "first",
@@ -40,12 +49,7 @@ describe("ringCentralConfigSchema", () => {
       historyMessageLimit: 250,
       homeChannel: "g-home",
       homeChannelName: "Home",
-      groupPolicy: "allowlist",
-      groups: {
-        "123": { enabled: true, requireMention: true, systemPrompt: "Be helpful", users: ["u1", 42] },
-      },
       requireMention: true,
-      dm: { policy: "open", allowFrom: ["u1", 99] },
       textChunkLimit: 2000,
       allowBots: false,
       workspace: "/tmp/workspace",
@@ -59,9 +63,22 @@ describe("ringCentralConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects invalid dm.policy enum", () => {
-    const result = ringCentralConfigSchema.safeParse({ dm: { policy: "invalid" } });
+  it("rejects invalid dmPolicy enum", () => {
+    const result = ringCentralConfigSchema.safeParse({ dmPolicy: "invalid" });
     expect(result.success).toBe(false);
+  });
+
+  it("rejects dmPolicy open without wildcard allowFrom", () => {
+    const result = ringCentralConfigSchema.safeParse({ dmPolicy: "open", allowFrom: ["u1"] });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects legacy access-control fields", () => {
+    expect(ringCentralConfigSchema.safeParse({ allowedUserEmails: ["owner@example.com"] }).success).toBe(false);
+    expect(ringCentralConfigSchema.safeParse({ allowedChannels: ["g1"] }).success).toBe(false);
+    expect(ringCentralConfigSchema.safeParse({ groups: { g1: { enabled: true } } }).success).toBe(false);
+    expect(ringCentralConfigSchema.safeParse({ dm: { policy: "open" } }).success).toBe(false);
+    expect(ringCentralConfigSchema.safeParse({ dm: { allowFrom: ["u1"] } }).success).toBe(false);
   });
 
   it("rejects invalid replyToMode and out-of-range history limit", () => {
@@ -84,9 +101,9 @@ describe("ringCentralConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts valid group config with mixed user ID types", () => {
+  it("accepts valid team config with mixed user ID types", () => {
     const result = ringCentralConfigSchema.safeParse({
-      groups: { "g1": { users: ["string-id", 12345] } },
+      teams: { "g1": { users: ["string-id", 12345] } },
     });
     expect(result.success).toBe(true);
   });

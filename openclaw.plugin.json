@@ -113,26 +113,6 @@
       "placeholder": "https://platform.ringcentral.com",
       "advanced": true
     },
-    "allowedUserEmails": {
-      "label": "Allowed User Emails",
-      "advanced": true
-    },
-    "allowAllUsers": {
-      "label": "Allow All Users",
-      "advanced": true
-    },
-    "allowedChannels": {
-      "label": "Allowed Channels",
-      "advanced": true
-    },
-    "ignoredChannels": {
-      "label": "Ignored Channels",
-      "advanced": true
-    },
-    "freeResponseChannels": {
-      "label": "Free-response Channels",
-      "advanced": true
-    },
     "threadRequireMention": {
       "label": "Require Mention in Threads",
       "advanced": true
@@ -189,43 +169,16 @@
       "placeholder": "123456789"
     },
     "groupPolicy": {
-      "label": "Group Policy",
-      "help": "How to handle group messages: disabled, allowlist, or open. When open, plain group messages are accepted unless requireMention or groups.<chat-id>.requireMention is true."
-    },
-    "groups": {
-      "label": "Allowed Groups",
-      "help": "Group/Team configurations keyed by Chat ID."
-    },
-    "groups.*": {
-      "label": "Group Configuration"
-    },
-    "groups.*.enabled": {
-      "label": "Enabled"
-    },
-    "groups.*.requireMention": {
-      "label": "Require @Mention"
-    },
-    "groups.*.systemPrompt": {
-      "label": "System Prompt",
-      "placeholder": "Custom instructions for this group."
-    },
-    "groups.*.users": {
-      "label": "Allowed Users",
-      "placeholder": "User ID or email"
+      "label": "Team Policy",
+      "help": "Controls RingCentral Team/Everyone chats: disabled, allowlist, or open. Team messages are mention-gated by default."
     },
     "requireMention": {
       "label": "Require @Mention (Global)",
-      "help": "Default @mention requirement for groups. If unset, groupPolicy=open accepts plain group messages; set true to require @mentions by default."
+      "help": "Default @mention requirement for Team/Everyone chats. Team messages are mention-gated by default when unset."
     },
     "dm": {
       "label": "DM Settings",
       "advanced": true
-    },
-    "dm.policy": {
-      "label": "DM Policy"
-    },
-    "dm.allowFrom": {
-      "label": "DM Allowlist"
     },
     "textChunkLimit": {
       "label": "Text Chunk Limit",
@@ -256,6 +209,67 @@
     },
     "actions.adaptiveCards": {
       "label": "Adaptive Cards"
+    },
+    "dmPolicy": {
+      "label": "DM Policy",
+      "help": "Controls direct message access: pairing, allowlist, open, or disabled. Open requires allowFrom to include \"*\"."
+    },
+    "allowFrom": {
+      "label": "DM Allowlist",
+      "help": "Stable RingCentral person IDs allowed in DMs. Email matching is disabled unless dangerouslyAllowEmailMatching is enabled."
+    },
+    "dangerouslyAllowEmailMatching": {
+      "label": "Allow Email Matching",
+      "help": "Dangerous compatibility mode for matching allowFrom entries against sender email aliases.",
+      "advanced": true
+    },
+    "teams": {
+      "label": "Allowed Teams",
+      "help": "RingCentral Team/Everyone chat configurations keyed by chat ID. Use \"*\" only for defaults."
+    },
+    "teams.*": {
+      "label": "Team Configuration"
+    },
+    "teams.*.allow": {
+      "label": "Allow Team"
+    },
+    "teams.*.requireMention": {
+      "label": "Require @Mention"
+    },
+    "teams.*.systemPrompt": {
+      "label": "System Prompt",
+      "placeholder": "Custom instructions for this team."
+    },
+    "teams.*.users": {
+      "label": "Allowed Users",
+      "placeholder": "Stable RingCentral person ID"
+    },
+    "dm.groupEnabled": {
+      "label": "Enable Group DMs",
+      "help": "Allow explicitly configured RingCentral Group conversations.",
+      "advanced": true
+    },
+    "dm.groupChannels": {
+      "label": "Allowed Group DMs",
+      "help": "RingCentral Group conversation configurations keyed by chat ID.",
+      "advanced": true
+    },
+    "dm.groupChannels.*": {
+      "label": "Group DM Configuration"
+    },
+    "dm.groupChannels.*.allow": {
+      "label": "Allow Group DM"
+    },
+    "dm.groupChannels.*.requireMention": {
+      "label": "Require @Mention"
+    },
+    "dm.groupChannels.*.systemPrompt": {
+      "label": "System Prompt",
+      "placeholder": "Custom instructions for this group DM."
+    },
+    "dm.groupChannels.*.users": {
+      "label": "Allowed Users",
+      "placeholder": "Stable RingCentral person ID"
     }
   },
   "configSchema": {
@@ -311,33 +325,6 @@
       },
       "selfOnly": {
         "type": "boolean"
-      },
-      "allowedUserEmails": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
-      "allowAllUsers": {
-        "type": "boolean"
-      },
-      "allowedChannels": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
-      "ignoredChannels": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
-      "freeResponseChannels": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
       },
       "threadRequireMention": {
         "type": "boolean"
@@ -417,59 +404,8 @@
           "open"
         ]
       },
-      "groups": {
-        "type": "object",
-        "additionalProperties": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "requireMention": {
-              "type": "boolean"
-            },
-            "systemPrompt": {
-              "type": "string"
-            },
-            "users": {
-              "type": "array",
-              "items": {
-                "type": [
-                  "string",
-                  "number"
-                ]
-              }
-            }
-          }
-        }
-      },
       "requireMention": {
         "type": "boolean"
-      },
-      "dm": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "policy": {
-            "type": "string",
-            "enum": [
-              "disabled",
-              "allowlist",
-              "pairing",
-              "open"
-            ]
-          },
-          "allowFrom": {
-            "type": "array",
-            "items": {
-              "type": [
-                "string",
-                "number"
-              ]
-            }
-          }
-        }
       },
       "textChunkLimit": {
         "type": "integer",
@@ -502,6 +438,90 @@
           },
           "adaptiveCards": {
             "type": "boolean"
+          }
+        }
+      },
+      "dmPolicy": {
+        "type": "string",
+        "enum": [
+          "disabled",
+          "allowlist",
+          "pairing",
+          "open"
+        ]
+      },
+      "allowFrom": {
+        "type": "array",
+        "items": {
+          "type": [
+            "string",
+            "number"
+          ]
+        }
+      },
+      "dangerouslyAllowEmailMatching": {
+        "type": "boolean"
+      },
+      "teams": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "type": "boolean"
+            },
+            "requireMention": {
+              "type": "boolean"
+            },
+            "systemPrompt": {
+              "type": "string"
+            },
+            "users": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "dm": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "groupEnabled": {
+            "type": "boolean"
+          },
+          "groupChannels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "allow": {
+                  "type": "boolean"
+                },
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "systemPrompt": {
+                  "type": "string"
+                },
+                "users": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "number"
+                    ]
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -578,33 +598,6 @@
           },
           "selfOnly": {
             "type": "boolean"
-          },
-          "allowedUserEmails": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "allowAllUsers": {
-            "type": "boolean"
-          },
-          "allowedChannels": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "ignoredChannels": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "freeResponseChannels": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           },
           "threadRequireMention": {
             "type": "boolean"
@@ -684,59 +677,8 @@
               "open"
             ]
           },
-          "groups": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "enabled": {
-                  "type": "boolean"
-                },
-                "requireMention": {
-                  "type": "boolean"
-                },
-                "systemPrompt": {
-                  "type": "string"
-                },
-                "users": {
-                  "type": "array",
-                  "items": {
-                    "type": [
-                      "string",
-                      "number"
-                    ]
-                  }
-                }
-              }
-            }
-          },
           "requireMention": {
             "type": "boolean"
-          },
-          "dm": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "policy": {
-                "type": "string",
-                "enum": [
-                  "disabled",
-                  "allowlist",
-                  "pairing",
-                  "open"
-                ]
-              },
-              "allowFrom": {
-                "type": "array",
-                "items": {
-                  "type": [
-                    "string",
-                    "number"
-                  ]
-                }
-              }
-            }
           },
           "textChunkLimit": {
             "type": "integer",
@@ -769,6 +711,90 @@
               },
               "adaptiveCards": {
                 "type": "boolean"
+              }
+            }
+          },
+          "dmPolicy": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "allowlist",
+              "pairing",
+              "open"
+            ]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          },
+          "dangerouslyAllowEmailMatching": {
+            "type": "boolean"
+          },
+          "teams": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "allow": {
+                  "type": "boolean"
+                },
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "systemPrompt": {
+                  "type": "string"
+                },
+                "users": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "number"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "dm": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "groupEnabled": {
+                "type": "boolean"
+              },
+              "groupChannels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "allow": {
+                      "type": "boolean"
+                    },
+                    "requireMention": {
+                      "type": "boolean"
+                    },
+                    "systemPrompt": {
+                      "type": "string"
+                    },
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "string",
+                          "number"
+                        ]
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -806,26 +832,6 @@
         "server": {
           "label": "API Server",
           "placeholder": "https://platform.ringcentral.com",
-          "advanced": true
-        },
-        "allowedUserEmails": {
-          "label": "Allowed User Emails",
-          "advanced": true
-        },
-        "allowAllUsers": {
-          "label": "Allow All Users",
-          "advanced": true
-        },
-        "allowedChannels": {
-          "label": "Allowed Channels",
-          "advanced": true
-        },
-        "ignoredChannels": {
-          "label": "Ignored Channels",
-          "advanced": true
-        },
-        "freeResponseChannels": {
-          "label": "Free-response Channels",
           "advanced": true
         },
         "threadRequireMention": {
@@ -884,43 +890,16 @@
           "placeholder": "123456789"
         },
         "groupPolicy": {
-          "label": "Group Policy",
-          "help": "How to handle group messages: disabled, allowlist, or open. When open, plain group messages are accepted unless requireMention or groups.<chat-id>.requireMention is true."
-        },
-        "groups": {
-          "label": "Allowed Groups",
-          "help": "Group/Team configurations keyed by Chat ID."
-        },
-        "groups.*": {
-          "label": "Group Configuration"
-        },
-        "groups.*.enabled": {
-          "label": "Enabled"
-        },
-        "groups.*.requireMention": {
-          "label": "Require @Mention"
-        },
-        "groups.*.systemPrompt": {
-          "label": "System Prompt",
-          "placeholder": "Custom instructions for this group."
-        },
-        "groups.*.users": {
-          "label": "Allowed Users",
-          "placeholder": "User ID or email"
+          "label": "Team Policy",
+          "help": "Controls RingCentral Team/Everyone chats: disabled, allowlist, or open. Team messages are mention-gated by default."
         },
         "requireMention": {
           "label": "Require @Mention (Global)",
-          "help": "Default @mention requirement for groups. If unset, groupPolicy=open accepts plain group messages; set true to require @mentions by default."
+          "help": "Default @mention requirement for Team/Everyone chats. Team messages are mention-gated by default when unset."
         },
         "dm": {
           "label": "DM Settings",
           "advanced": true
-        },
-        "dm.policy": {
-          "label": "DM Policy"
-        },
-        "dm.allowFrom": {
-          "label": "DM Allowlist"
         },
         "textChunkLimit": {
           "label": "Text Chunk Limit",
@@ -951,6 +930,67 @@
         },
         "actions.adaptiveCards": {
           "label": "Adaptive Cards"
+        },
+        "dmPolicy": {
+          "label": "DM Policy",
+          "help": "Controls direct message access: pairing, allowlist, open, or disabled. Open requires allowFrom to include \"*\"."
+        },
+        "allowFrom": {
+          "label": "DM Allowlist",
+          "help": "Stable RingCentral person IDs allowed in DMs. Email matching is disabled unless dangerouslyAllowEmailMatching is enabled."
+        },
+        "dangerouslyAllowEmailMatching": {
+          "label": "Allow Email Matching",
+          "help": "Dangerous compatibility mode for matching allowFrom entries against sender email aliases.",
+          "advanced": true
+        },
+        "teams": {
+          "label": "Allowed Teams",
+          "help": "RingCentral Team/Everyone chat configurations keyed by chat ID. Use \"*\" only for defaults."
+        },
+        "teams.*": {
+          "label": "Team Configuration"
+        },
+        "teams.*.allow": {
+          "label": "Allow Team"
+        },
+        "teams.*.requireMention": {
+          "label": "Require @Mention"
+        },
+        "teams.*.systemPrompt": {
+          "label": "System Prompt",
+          "placeholder": "Custom instructions for this team."
+        },
+        "teams.*.users": {
+          "label": "Allowed Users",
+          "placeholder": "Stable RingCentral person ID"
+        },
+        "dm.groupEnabled": {
+          "label": "Enable Group DMs",
+          "help": "Allow explicitly configured RingCentral Group conversations.",
+          "advanced": true
+        },
+        "dm.groupChannels": {
+          "label": "Allowed Group DMs",
+          "help": "RingCentral Group conversation configurations keyed by chat ID.",
+          "advanced": true
+        },
+        "dm.groupChannels.*": {
+          "label": "Group DM Configuration"
+        },
+        "dm.groupChannels.*.allow": {
+          "label": "Allow Group DM"
+        },
+        "dm.groupChannels.*.requireMention": {
+          "label": "Require @Mention"
+        },
+        "dm.groupChannels.*.systemPrompt": {
+          "label": "System Prompt",
+          "placeholder": "Custom instructions for this group DM."
+        },
+        "dm.groupChannels.*.users": {
+          "label": "Allowed Users",
+          "placeholder": "Stable RingCentral person ID"
         }
       }
     }

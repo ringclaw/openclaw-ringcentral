@@ -26,8 +26,8 @@ manual development outside the OpenClaw plugin manager.
 ## Features
 
 - Bot Add-in WebSocket ingress and outbound replies
-- Optional owner JWT credentials for owner-observed groups, history reads, and fallback sends
-- OpenClaw channel ingress policy for DM/group allowlists, pairing, mention gates, and ignored/allowed channels
+- Optional owner JWT credentials for owner-observed chats, history reads, and fallback sends
+- OpenClaw channel ingress policy for DM pairing/allowlists, Team allowlists, group DM allowlists, and mention gates
 - Threaded replies with `off`, `first`, and `all` modes
 - Thread follow-up detection: once the bot participates in a thread, subsequent messages in that thread can skip the mention requirement (controlled by `threadRequireMention`)
 - Inbound file/image attachments are downloaded into OpenClaw managed media storage after admission
@@ -74,7 +74,7 @@ Owner credentials for history/fallback:
 
 `credentials` is still accepted as a deprecated alias for `ownerCredentials`.
 
-Group allowlist with per-group mention gate and thread follow-up:
+Team allowlist with per-team mention gate and thread follow-up:
 
 ```json
 {
@@ -83,11 +83,13 @@ Group allowlist with per-group mention gate and thread follow-up:
       "enabled": true,
       "botToken": "your-bot-static-token",
       "groupPolicy": "allowlist",
-      "requireMention": true,
       "threadRequireMention": false,
-      "groups": {
+      "teams": {
+        "*": {
+          "requireMention": true
+        },
         "123456789": {
-          "enabled": true,
+          "allow": true,
           "requireMention": true,
           "users": ["sender-id-1", "sender-id-2"]
         }
@@ -97,9 +99,34 @@ Group allowlist with per-group mention gate and thread follow-up:
 }
 ```
 
+`Team` and `Everyone` chats are treated as channel surfaces. `teams."*"` is only
+for defaults such as `requireMention`; it does not allowlist every team.
+
 When `threadRequireMention` is `false`, replies inside a thread the bot has
 already participated in do not need a new mention to activate the bot.
 Default is `true` (every message in a thread needs a mention).
+
+RingCentral `Group` conversations are treated like Discord group DMs and are
+ignored by default. Enable only explicit group DM conversations:
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "dm": {
+        "groupEnabled": true,
+        "groupChannels": {
+          "987654321": {
+            "allow": true,
+            "requireMention": false,
+            "users": ["sender-id-1"]
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 Opt in to the processing placeholder (shown while an agent run is active):
 
@@ -124,17 +151,51 @@ DM policy and sender allowlist:
 {
   "channels": {
     "ringcentral": {
-      "dm": {
-        "policy": "allowlist",
-        "allowFrom": ["sender-id-1"]
-      }
+      "dmPolicy": "allowlist",
+      "allowFrom": ["sender-id-1"]
     }
   }
 }
 ```
 
-`dm.policy` can be `disabled` (default for group-only deployments), `allowlist`,
-`pairing`, or `open`.
+`dmPolicy` can be `disabled`, `allowlist`, `pairing`, or `open`. The default is
+`pairing`. `dmPolicy: "open"` requires `allowFrom: ["*"]`.
+
+`allowFrom` matches stable RingCentral person IDs by default. Email matching is
+disabled unless `dangerouslyAllowEmailMatching: true` is set.
+
+## Targets
+
+Canonical outbound targets are provider-neutral and use the selected
+`ringcentral` channel to determine transport:
+
+| Target | Description |
+| --- | --- |
+| `user:<personId>` | Create/find a DM with that RingCentral person, then send |
+| `team:<chatId>` | Send to a RingCentral Team chat |
+| `channel:<chatId>` | Send to an Everyone/channel chat |
+| `group:<chatId>` | Send to an explicitly configured RingCentral Group conversation |
+
+Legacy `ringcentral:*`, `rc:*`, and bare numeric targets are rejected.
+
+## Breaking Migration
+
+This release intentionally removes the old access-control shape:
+
+| Old | New |
+| --- | --- |
+| `allowedUserEmails` | `allowFrom` with stable person IDs |
+| `allowAllUsers` | `dmPolicy: "open"` plus `allowFrom: ["*"]` |
+| `allowedChannels` | `teams` |
+| `ignoredChannels` | omit or set `teams.<id>.allow=false` |
+| `freeResponseChannels` | `teams.<id>.requireMention=false` |
+| `groups` | `teams` |
+| `dm.policy` | `dmPolicy` |
+| `dm.allowFrom` | `allowFrom` |
+
+The corresponding legacy env vars (`RC_ALLOWED_USER_EMAILS`,
+`RC_ALLOW_ALL_USERS`, `RC_ALLOWED_CHANNELS`, `RC_IGNORED_CHANNELS`, and
+`RC_FREE_RESPONSE_CHANNELS`) are rejected with migration errors.
 
 ## Pair With A Dedicated Agent
 
@@ -186,13 +247,15 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `RC_USER_CLIENT_ID` | Owner REST API app client ID |
 | `RC_USER_CLIENT_SECRET` | Owner REST API app client secret |
 | `RC_USER_JWT_TOKEN` | Owner JWT token |
-| `RC_ALLOWED_USER_EMAILS` | Comma-separated DM/user allowlist aliases |
-| `RC_ALLOW_ALL_USERS` | Allow all DM senders |
-| `RC_ALLOWED_CHANNELS` | Comma-separated chat IDs allowed for group/channel ingress |
-| `RC_IGNORED_CHANNELS` | Comma-separated chat IDs ignored for ingress |
-| `RC_REQUIRE_MENTION` | Require mention in groups, default `true` |
+| `RC_DM_POLICY` | `disabled`, `allowlist`, `pairing`, or `open`; default `pairing` |
+| `RC_ALLOW_FROM` | Comma-separated stable person IDs allowed for DMs |
+| `RC_GROUP_POLICY` | Team policy: `disabled`, `allowlist`, or `open`; default `disabled` |
+| `RC_TEAMS` | JSON object of Team configurations keyed by chat ID |
+| `RC_TEAM_REQUIRE_MENTION` | Wildcard Team mention default |
+| `RC_GROUP_DM_ENABLED` | Enable explicitly configured RingCentral Group conversations |
+| `RC_GROUP_DM_CHANNELS` | JSON object of Group DM configurations keyed by chat ID |
+| `RC_REQUIRE_MENTION` | Global Team mention override |
 | `RC_THREAD_REQUIRE_MENTION` | Require mention in thread follow-ups, default `true` |
-| `RC_FREE_RESPONSE_CHANNELS` | Channels that do not require mentions |
 | `RC_NO_THREAD_CHANNELS` | Channels where replies must be unthreaded |
 | `RC_REPLY_TO_MODE` | `off`, `first`, or `all`; default `first` |
 | `RC_PROCESSING_EMOJI_ENABLED` | Enable processing placeholder, default `false` |
@@ -209,18 +272,22 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `groupPolicy` | `disabled` | `disabled`, `allowlist`, or `open` |
-| `requireMention` | `true` | Require mention in group messages |
+| `dmPolicy` | `pairing` | `disabled`, `allowlist`, `pairing`, or `open` |
+| `allowFrom` | `[]` | Stable person IDs allowed in DMs |
+| `dangerouslyAllowEmailMatching` | `false` | Allow matching `allowFrom` against email aliases |
+| `groupPolicy` | `disabled` | Team/Everyone handling: `disabled`, `allowlist`, or `open` |
+| `requireMention` | `true` | Global Team mention override |
 | `threadRequireMention` | `true` | Require mention in thread follow-ups (set `false` to allow follow-up replies without mention) |
-| `groups.<chatId>.enabled` | `true` | Enable an allowlisted group |
-| `groups.<chatId>.requireMention` | inherited | Per-group mention gate |
-| `groups.<chatId>.users` | `[]` | Per-group sender allowlist |
-| `groups.<chatId>.systemPrompt` | — | Per-group system prompt override |
-| `dm.policy` | contextual | Bot-only defaults to `open`; owner credentials default to owner-only `allowlist` unless explicitly configured |
-| `dm.allowFrom` | `[]` | Stable sender IDs allowed in DMs |
+| `teams.<chatId>.allow` | `true` | Enable an allowlisted Team |
+| `teams.<chatId>.requireMention` | inherited | Per-Team mention gate |
+| `teams.<chatId>.users` | `[]` | Per-Team sender allowlist |
+| `teams.<chatId>.systemPrompt` | — | Per-Team system prompt override |
+| `dm.groupEnabled` | `false` | Enable explicitly configured RingCentral Group conversations |
+| `dm.groupChannels.<chatId>.allow` | `true` | Enable an allowlisted group DM |
+| `dm.groupChannels.<chatId>.requireMention` | `false` | Per-group-DM mention gate |
+| `dm.groupChannels.<chatId>.users` | `[]` | Per-group-DM sender allowlist |
 | `replyToMode` | `first` | Threading behavior for replies (`off`, `first`, `all`) |
 | `noThreadChannels` | `[]` | Chat IDs that force unthreaded sends |
-| `freeResponseChannels` | `[]` | Chat IDs that do not require mentions |
 | `processingPlaceholder.enabled` | `false` | Show emoji placeholder while agent is processing |
 | `processingPlaceholder.initialText` | `👀` | Initial placeholder text |
 | `processingPlaceholder.delayedText` | `⏳` | Text shown after edit delay |
@@ -234,8 +301,6 @@ Use `RC_*` variables only. Existing `RINGCENTRAL_*` variables are intentionally 
 | `textChunkLimit` | — | Max text length per message before chunking |
 | `historyMessageLimit` | `250` | Default history record count (max `1000`) |
 | `homeChannel` | — | Default history/home chat ID |
-
-When owner credentials are configured and no explicit DM allowlist is provided, the effective default is owner-only unless `allowAllUsers` is enabled.
 
 ## RingCentral Setup
 

@@ -204,6 +204,23 @@ export interface AttachmentDownloadConfig {
   maxBytes?: number;
 }
 
+export type RingCentralDmPolicy = "disabled" | "allowlist" | "pairing" | "open";
+export type RingCentralGroupPolicy = "disabled" | "allowlist" | "open";
+
+export interface RingCentralTeamConfig {
+  allow?: boolean;
+  requireMention?: boolean;
+  systemPrompt?: string;
+  users?: Array<string | number>;
+}
+
+export interface RingCentralGroupDmConfig {
+  allow?: boolean;
+  requireMention?: boolean;
+  systemPrompt?: string;
+  users?: Array<string | number>;
+}
+
 export interface RingCentralConfig {
   enabled?: boolean;
   name?: string;
@@ -214,11 +231,15 @@ export interface RingCentralConfig {
   server?: string;
   botExtensionId?: string;
   selfOnly?: boolean;
-  allowedUserEmails?: string[];
-  allowAllUsers?: boolean;
-  allowedChannels?: string[];
-  ignoredChannels?: string[];
-  freeResponseChannels?: string[];
+  dmPolicy?: RingCentralDmPolicy;
+  allowFrom?: Array<string | number>;
+  dangerouslyAllowEmailMatching?: boolean;
+  groupPolicy?: RingCentralGroupPolicy;
+  teams?: Record<string, RingCentralTeamConfig>;
+  dm?: {
+    groupEnabled?: boolean;
+    groupChannels?: Record<string, RingCentralGroupDmConfig>;
+  };
   threadRequireMention?: boolean;
   noThreadChannels?: string[];
   replyToMode?: RingCentralReplyToMode;
@@ -228,13 +249,7 @@ export interface RingCentralConfig {
   historyMessageLimit?: number;
   homeChannel?: string;
   homeChannelName?: string;
-  groupPolicy?: "disabled" | "allowlist" | "open";
-  groups?: Record<string, GroupConfig>;
   requireMention?: boolean;
-  dm?: {
-    policy?: "disabled" | "allowlist" | "pairing" | "open";
-    allowFrom?: Array<string | number>;
-  };
   textChunkLimit?: number;
   allowBots?: boolean;
   workspace?: string;
@@ -248,31 +263,23 @@ export interface RingCentralConfig {
   };
 }
 
-export interface GroupConfig {
-  enabled?: boolean;
-  requireMention?: boolean;
-  systemPrompt?: string;
-  users?: Array<string | number>;
-}
-
 export interface ResolvedAccount {
   botToken: string;
   ownerCredentials?: ResolvedRingCentralOwnerCredentials;
   /** @deprecated Use ownerCredentials. */
   credentials?: ResolvedRingCentralOwnerCredentials;
   server: string;
-  allowedUserEmails: string[];
-  allowAllUsers: boolean;
-  allowedChannels: string[];
-  ignoredChannels: string[];
-  freeResponseChannels: string[];
+  allowFrom: string[];
+  dangerouslyAllowEmailMatching: boolean;
+  groupDmEnabled: boolean;
+  groupDmChannels: Record<string, RingCentralGroupDmConfig>;
   noThreadChannels: string[];
   replyToMode: RingCentralReplyToMode;
   requireMention: boolean;
   requireMentionExplicit: boolean;
   threadRequireMention: boolean;
-  groupPolicy: "disabled" | "allowlist" | "open";
-  dmPolicy: "disabled" | "allowlist" | "pairing" | "open";
+  groupPolicy: RingCentralGroupPolicy;
+  dmPolicy: RingCentralDmPolicy;
   textChunkLimit?: number;
   processingPlaceholder: Required<ProcessingPlaceholderConfig>;
   attachments: Required<AttachmentDownloadConfig>;

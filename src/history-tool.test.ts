@@ -33,7 +33,7 @@ describe("ringcentral_get_recent_messages", () => {
     const tool = createRingCentralHistoryTool({
       channels: { ringcentral: { botToken: "bot" } },
     });
-    const result = await tool.execute("call-1", { target: "ringcentral:group:g1" } as any);
+    const result = await tool.execute("call-1", { target: "team:g1" } as any);
     expect(result.content[0]?.text).toContain("owner credentials");
   });
 
@@ -65,7 +65,7 @@ describe("ringcentral_get_recent_messages", () => {
       );
 
     const result = await tool.execute("call-1", {
-      target: "ringcentral:group:g1",
+      target: "team:g1",
       record_count: 10,
     } as any);
 

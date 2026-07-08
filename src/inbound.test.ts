@@ -31,7 +31,7 @@ function makePost(overrides: Partial<Post> = {}): Post {
   };
 }
 
-function makeClient(chatType = "Group", email = "user@example.com") {
+function makeClient(chatType = "Team", email = "user@example.com") {
   return {
     getChat: vi.fn().mockResolvedValue({ id: "g1", type: chatType, name: "General" }),
     getPersonInfo: vi.fn().mockResolvedValue({ id: "u1", email }),
@@ -54,8 +54,8 @@ function makeRuntime() {
         agentId: "main",
         accountId: "default",
         channel: "ringcentral",
-        sessionKey: "agent:main:ringcentral:group:g1",
-        mainSessionKey: "agent:main:ringcentral:group:g1",
+        sessionKey: "agent:main:ringcentral:channel:g1",
+        mainSessionKey: "agent:main:ringcentral:channel:g1",
         lastRoutePolicy: "session",
         matchedBy: "default",
       })),
@@ -99,7 +99,7 @@ describe("handleInboundPost", () => {
     });
   });
 
-  it("dispatches allowed group messages through OpenClaw runtime", async () => {
+  it("dispatches allowed team messages through OpenClaw runtime as channel sessions", async () => {
     const runtime = makeRuntime();
     await handleInboundPost({
       post: makePost(),
@@ -117,12 +117,21 @@ describe("handleInboundPost", () => {
     });
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
     expect(runtime.reply.finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({ BodyForAgent: "hello", NativeChannelId: "g1" }),
+      expect.objectContaining({
+        BodyForAgent: "hello",
+        ChatType: "channel",
+        From: "team:g1",
+        NativeChannelId: "g1",
+      }),
+    );
+    expect(runtime.routing.resolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ peer: { kind: "channel", id: "g1" } }),
     );
   });
 
-  it("does not require mentions by default when groupPolicy is open", async () => {
+  it("requires mentions by default when groupPolicy is open", async () => {
     const runtime = makeRuntime();
+    const log = vi.fn();
     await handleInboundPost({
       post: makePost({ text: "plain group message" }),
       cfg: {},
@@ -130,14 +139,18 @@ describe("handleInboundPost", () => {
       account: resolveAccount({
         botToken: "bot",
         groupPolicy: "open",
+        debugInboundMessages: true,
         processingPlaceholder: { enabled: false },
       }),
       botPersonId: "bot",
       channelRuntime: runtime,
       tracker: new ThreadParticipationTracker(),
+      log,
     });
 
-    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    const drop = loggedMessages(log).find((message) => message.startsWith("[ringcentral] inbound message dropped "));
+    expect(drop).toContain('"reasonCode":"activation_skipped"');
   });
 
   it("honors explicit requireMention when groupPolicy is open", async () => {
@@ -328,12 +341,12 @@ describe("handleInboundPost", () => {
     const message = loggedMessages(log).find((entry) => entry.startsWith("[ringcentral] inbound message "));
     expect(message).toContain('"chatId":"g1"');
     expect(message).toContain('"creatorId":"u1"');
-    expect(message).toContain('"chatType":"group"');
+    expect(message).toContain('"chatType":"channel"');
     expect(message).toContain('"textLength":8');
     expect(message).toContain('"text":"debug me"');
   });
 
-  it("drops groups when groupPolicy is disabled", async () => {
+  it("drops teams when groupPolicy is disabled", async () => {
     const runtime = makeRuntime();
     const client = makeClient();
     await handleInboundPost({
@@ -440,7 +453,7 @@ describe("handleInboundPost", () => {
     expect(client.downloadAttachment).not.toHaveBeenCalled();
   });
 
-  it("allows DM senders by email alias", async () => {
+  it("allows DM senders by stable person ID", async () => {
     const runtime = makeRuntime();
     await handleInboundPost({
       post: makePost({ groupId: "dm1", creatorId: "u-owner" }),
@@ -448,8 +461,8 @@ describe("handleInboundPost", () => {
       botClient: makeClient("Direct", "owner@example.com"),
       account: resolveAccount({
         botToken: "bot",
-        dm: { policy: "allowlist" },
-        allowedUserEmails: ["owner@example.com"],
+        dmPolicy: "allowlist",
+        allowFrom: ["u-owner"],
         processingPlaceholder: { enabled: false },
       }),
       botPersonId: "bot",
@@ -457,6 +470,86 @@ describe("handleInboundPost", () => {
       tracker: new ThreadParticipationTracker(),
     });
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("rejects email allowFrom entries unless dangerous email matching is enabled", async () => {
+    const runtime = makeRuntime();
+    await handleInboundPost({
+      post: makePost({ groupId: "dm1", creatorId: "u-owner" }),
+      cfg: {},
+      botClient: makeClient("Direct", "owner@example.com"),
+      account: resolveAccount({
+        botToken: "bot",
+        dmPolicy: "allowlist",
+        allowFrom: ["owner@example.com"],
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log: vi.fn(),
+    });
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("allows email allowFrom entries when dangerous email matching is enabled", async () => {
+    const runtime = makeRuntime();
+    await handleInboundPost({
+      post: makePost({ groupId: "dm1", creatorId: "u-owner" }),
+      cfg: {},
+      botClient: makeClient("Direct", "owner@example.com"),
+      account: resolveAccount({
+        botToken: "bot",
+        dmPolicy: "allowlist",
+        allowFrom: ["owner@example.com"],
+        dangerouslyAllowEmailMatching: true,
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+    });
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("ignores RingCentral group DMs by default", async () => {
+    const runtime = makeRuntime();
+    await handleInboundPost({
+      post: makePost({ groupId: "gdm1" }),
+      cfg: {},
+      botClient: makeClient("Group"),
+      account: resolveAccount({
+        botToken: "bot",
+        groupPolicy: "open",
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log: vi.fn(),
+    });
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("dispatches allowlisted RingCentral group DMs", async () => {
+    const runtime = makeRuntime();
+    await handleInboundPost({
+      post: makePost({ groupId: "gdm1" }),
+      cfg: {},
+      botClient: makeClient("Group"),
+      account: resolveAccount({
+        botToken: "bot",
+        dm: { groupEnabled: true, groupChannels: { gdm1: { allow: true, requireMention: false } } },
+        processingPlaceholder: { enabled: false },
+      }),
+      botPersonId: "bot",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+    });
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(runtime.reply.finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({ ChatType: "group", From: "group:gdm1" }),
+    );
   });
 
   it("downloads admitted attachments into OpenClaw inbound media payload", async () => {
