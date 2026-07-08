@@ -33,7 +33,7 @@ describe("ringcentral_get_recent_messages", () => {
     const tool = createRingCentralHistoryTool({
       channels: { ringcentral: { botToken: "bot" } },
     });
-    const result = await tool.execute("call-1", { target: "ringcentral:group:g1" } as any);
+    const result = await tool.execute("call-1", { target: "team:g1" } as any);
     expect(result.content[0]?.text).toContain("owner credentials");
   });
 
@@ -65,11 +65,34 @@ describe("ringcentral_get_recent_messages", () => {
       );
 
     const result = await tool.execute("call-1", {
-      target: "ringcentral:group:g1",
+      target: "team:g1",
       record_count: 10,
     } as any);
 
     expect(result.content[0]?.text).toContain("hello");
     expect(result.details).toMatchObject({ chatId: "g1", count: 1 });
+  });
+
+  it("does not resolve legacy ringcentral chat targets", async () => {
+    const tool = createRingCentralHistoryTool({
+      channels: {
+        ringcentral: {
+          botToken: "bot",
+          ownerCredentials: { clientId: "cid", clientSecret: "cs", jwt: "jwt" },
+        },
+      },
+    });
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ access_token: "access", expires_in: 3600 }))
+      .mockResolvedValueOnce(jsonResponse({ records: [] }));
+
+    const result = await tool.execute("call-1", {
+      target: "ringcentral:chat:g1",
+      target_type: "chat",
+      record_count: 10,
+    } as any);
+
+    expect(result.content[0]?.text).toContain("Unable to resolve RingCentral history target.");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });

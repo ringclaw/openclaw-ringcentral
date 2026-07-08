@@ -4,6 +4,10 @@ import type {
   ProcessingPlaceholderConfig,
   ResolvedAccount,
   ResolvedRingCentralOwnerCredentials,
+  RingCentralDmPolicy,
+  RingCentralGroupDmConfig,
+  RingCentralGroupPolicy,
+  RingCentralTeamConfig,
   RingCentralConfig,
   RingCentralOwnerCredentials,
   RingCentralReplyToMode,
@@ -22,6 +26,28 @@ const DEFAULT_PROCESSING_PLACEHOLDER: Required<ProcessingPlaceholderConfig> = {
   initialText: "👀",
   delayedText: "⏳",
   editDelaySeconds: 2,
+};
+
+const LEGACY_CONFIG_FIELDS: Record<string, string> = {
+  allowedUserEmails: "allowFrom",
+  allowAllUsers: 'dmPolicy: "open" with allowFrom: ["*"]',
+  allowedChannels: "teams",
+  ignoredChannels: "teams",
+  freeResponseChannels: "teams.*.requireMention=false",
+  groups: "teams",
+};
+
+const LEGACY_DM_FIELDS: Record<string, string> = {
+  policy: "dmPolicy",
+  allowFrom: "allowFrom",
+};
+
+const LEGACY_ENV_FIELDS: Record<string, string> = {
+  RC_ALLOWED_USER_EMAILS: "RC_ALLOW_FROM",
+  RC_ALLOW_ALL_USERS: 'RC_DM_POLICY=open and RC_ALLOW_FROM="*"',
+  RC_ALLOWED_CHANNELS: "RC_TEAMS",
+  RC_IGNORED_CHANNELS: "RC_TEAMS",
+  RC_FREE_RESPONSE_CHANNELS: "RC_TEAMS",
 };
 
 function readEnv(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -78,8 +104,91 @@ function readDelimitedEntries(
     .filter(Boolean);
 }
 
-function normalizeEmails(entries: string[]): string[] {
-  return Array.from(new Set(entries.map((entry) => entry.toLowerCase())));
+function normalizeAllowFrom(entries: Array<string | number> | string[]): string[] {
+  return Array.from(new Set(entries.map((entry) => String(entry).trim()).filter(Boolean)));
+}
+
+function readPolicy<T extends string>(
+  value: unknown,
+  envName: string,
+  env: NodeJS.ProcessEnv,
+  fallback: T,
+  allowed: readonly T[],
+): T {
+  const raw = String(value ?? readEnv(envName, env) ?? fallback).trim();
+  return (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
+}
+
+function readRecordEnv<T extends Record<string, unknown>>(
+  envName: string,
+  env: NodeJS.ProcessEnv,
+): T | undefined {
+  const raw = readEnv(envName, env);
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as T)
+      : undefined;
+  } catch {
+    throw new Error(`${envName} must be a JSON object.`);
+  }
+}
+
+function assertNoLegacyConfig(cfg: RingCentralConfig): void {
+  for (const [field, replacement] of Object.entries(LEGACY_CONFIG_FIELDS)) {
+    if (Object.prototype.hasOwnProperty.call(cfg, field)) {
+      throw new Error(
+        `Legacy RingCentral config field "${field}" is no longer supported. Use "${replacement}" instead.`,
+      );
+    }
+  }
+  const dm = cfg.dm as Record<string, unknown> | undefined;
+  if (dm) {
+    for (const [field, replacement] of Object.entries(LEGACY_DM_FIELDS)) {
+      if (Object.prototype.hasOwnProperty.call(dm, field)) {
+        throw new Error(
+          `Legacy RingCentral config field "dm.${field}" is no longer supported. Use "${replacement}" instead.`,
+        );
+      }
+    }
+  }
+}
+
+function assertNoLegacyEnv(env: NodeJS.ProcessEnv): void {
+  for (const [name, replacement] of Object.entries(LEGACY_ENV_FIELDS)) {
+    if (readEnv(name, env) !== undefined) {
+      throw new Error(`Legacy RingCentral env "${name}" is no longer supported. Use "${replacement}" instead.`);
+    }
+  }
+}
+
+function resolveTeams(
+  cfg: RingCentralConfig,
+  env: NodeJS.ProcessEnv,
+): Record<string, RingCentralTeamConfig> | undefined {
+  const envTeams = readRecordEnv<Record<string, RingCentralTeamConfig>>("RC_TEAMS", env);
+  const teams = cfg.teams ?? envTeams;
+  const teamRequireMention = readEnv("RC_TEAM_REQUIRE_MENTION", env);
+  if (teamRequireMention === undefined) {
+    return teams;
+  }
+  return {
+    ...(teams ?? {}),
+    "*": {
+      ...(teams?.["*"] ?? {}),
+      requireMention: readBoolean(undefined, true, "RC_TEAM_REQUIRE_MENTION", env),
+    },
+  };
+}
+
+function resolveGroupDmChannels(
+  cfg: RingCentralConfig,
+  env: NodeJS.ProcessEnv,
+): Record<string, RingCentralGroupDmConfig> {
+  return cfg.dm?.groupChannels ?? readRecordEnv<Record<string, RingCentralGroupDmConfig>>("RC_GROUP_DM_CHANNELS", env) ?? {};
 }
 
 function resolveOwnerCredentials(
@@ -158,21 +267,34 @@ export function resolveAccount(
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedAccount {
   const cfg = channelConfig ?? {};
+  assertNoLegacyConfig(cfg);
+  assertNoLegacyEnv(env);
   const botToken = cfg.botToken ?? readEnv("RC_BOT_TOKEN", env) ?? "";
   if (!botToken) {
     throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
   }
 
   const ownerCredentials = resolveOwnerCredentials(cfg, env);
-  const allowedUserEmails = normalizeEmails(
-    readDelimitedEntries(cfg.allowedUserEmails, "RC_ALLOWED_USER_EMAILS", env),
+  const allowFrom = normalizeAllowFrom(
+    cfg.allowFrom ?? readDelimitedEntries(undefined, "RC_ALLOW_FROM", env),
   );
-  const allowAllUsers = readBoolean(cfg.allowAllUsers, false, "RC_ALLOW_ALL_USERS", env);
-  const dmPolicy =
-    cfg.dm?.policy ??
-    (ownerCredentials && !allowAllUsers && allowedUserEmails.length === 0 && !cfg.dm?.allowFrom?.length
-      ? "allowlist"
-      : "open");
+  const dmPolicy = readPolicy<RingCentralDmPolicy>(
+    cfg.dmPolicy,
+    "RC_DM_POLICY",
+    env,
+    "pairing",
+    ["disabled", "allowlist", "pairing", "open"],
+  );
+  if (dmPolicy === "open" && !allowFrom.includes("*")) {
+    throw new Error('RingCentral dmPolicy="open" requires allowFrom to include "*".');
+  }
+  const groupPolicy = readPolicy<RingCentralGroupPolicy>(
+    cfg.groupPolicy,
+    "RC_GROUP_POLICY",
+    env,
+    "disabled",
+    ["disabled", "allowlist", "open"],
+  );
 
   const historyMessageLimit = clampInteger(
     readNumber(cfg.historyMessageLimit, DEFAULT_HISTORY_MESSAGE_LIMIT, "RC_HISTORY_MESSAGE_LIMIT", env),
@@ -187,17 +309,16 @@ export function resolveAccount(
     ownerCredentials,
     credentials: ownerCredentials,
     server: cfg.server ?? readEnv("RC_SERVER_URL", env) ?? DEFAULT_SERVER,
-    allowedUserEmails,
-    allowAllUsers,
-    allowedChannels: readDelimitedEntries(cfg.allowedChannels, "RC_ALLOWED_CHANNELS", env),
-    ignoredChannels: readDelimitedEntries(cfg.ignoredChannels, "RC_IGNORED_CHANNELS", env),
-    freeResponseChannels: readDelimitedEntries(cfg.freeResponseChannels, "RC_FREE_RESPONSE_CHANNELS", env),
+    allowFrom,
+    dangerouslyAllowEmailMatching: readBoolean(cfg.dangerouslyAllowEmailMatching, false, undefined, env),
+    groupDmEnabled: readBoolean(cfg.dm?.groupEnabled, false, "RC_GROUP_DM_ENABLED", env),
+    groupDmChannels: resolveGroupDmChannels(cfg, env),
     noThreadChannels: readDelimitedEntries(cfg.noThreadChannels, "RC_NO_THREAD_CHANNELS", env),
     replyToMode: resolveReplyToMode(cfg.replyToMode, env),
     requireMention,
     requireMentionExplicit: cfg.requireMention !== undefined || requireMentionEnv !== undefined,
     threadRequireMention: readBoolean(cfg.threadRequireMention, true, "RC_THREAD_REQUIRE_MENTION", env),
-    groupPolicy: cfg.groupPolicy ?? "disabled",
+    groupPolicy,
     dmPolicy,
     textChunkLimit: cfg.textChunkLimit,
     processingPlaceholder: resolveProcessingPlaceholder(cfg, env),
@@ -206,7 +327,7 @@ export function resolveAccount(
     historyMessageLimit,
     homeChannel: cfg.homeChannel ?? readEnv("RC_HOME_CHANNEL", env),
     homeChannelName: cfg.homeChannelName ?? readEnv("RC_HOME_CHANNEL_NAME", env),
-    config: cfg,
+    config: { ...cfg, teams: resolveTeams(cfg, env) },
   };
 }
 

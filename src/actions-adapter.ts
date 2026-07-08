@@ -11,7 +11,7 @@ import type { CreateAdaptiveCardRequest } from "./types.js";
 import { createBotClient } from "./client.js";
 import { getRcConfig, isAccountConfigured, resolveAccount } from "./accounts.js";
 import * as actions from "./actions.js";
-import { extractChatId } from "./targets.js";
+import { parseTarget } from "./targets.js";
 
 const CHAT_SCOPED_ACTIONS = new Set<ActionName>([
   "send-message",
@@ -175,9 +175,28 @@ function agentToolResult(details: unknown): AgentToolResult<unknown> {
   };
 }
 
-function readTargetChatId(params: Record<string, unknown>): string {
-  const target = String(params.to ?? params.chatId ?? params.chat_id ?? "");
-  return extractChatId(target) ?? target;
+async function resolveTargetChatId(
+  client: RingCentralClient,
+  params: Record<string, unknown>,
+): Promise<string> {
+  const hasCanonicalTarget = params.to !== undefined || params.target !== undefined;
+  const target = String(params.to ?? params.target ?? params.chatId ?? params.chat_id ?? "");
+  if (!target) {
+    return "";
+  }
+  const parsed = parseTarget(target);
+  if (parsed?.kind === "user") {
+    return (await client.createOrFindDm([parsed.id])).id;
+  }
+  if (parsed) {
+    return parsed.id;
+  }
+  if (hasCanonicalTarget) {
+    throw new Error(
+      `Invalid RingCentral target "${target}". Use user:<personId>, team:<chatId>, group:<chatId>, or channel:<chatId>.`,
+    );
+  }
+  return target;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -236,7 +255,7 @@ export const ringCentralMessageActions: ChannelMessageActionAdapter = {
   handleAction: async (ctx) => {
     const client = createActionClient(ctx.cfg);
     const params = ctx.params as Record<string, unknown>;
-    const chatId = readTargetChatId(params);
+    const chatId = await resolveTargetChatId(client, params);
     const postId = String(params.postId ?? params.post_id ?? params.messageId ?? "");
     const text = String(params.text ?? params.message ?? "");
     switch (ctx.action) {
@@ -262,7 +281,7 @@ export async function handleAction(
   params: Record<string, unknown>,
   sessionChatId?: string,
 ): Promise<unknown> {
-  const chatId = String(params.chatId ?? params.chat_id ?? "");
+  const chatId = await resolveTargetChatId(client, params);
   const postId = String(params.postId ?? params.post_id ?? params.messageId ?? "");
   const text = String(params.text ?? params.message ?? "");
 
@@ -303,7 +322,7 @@ async function executeAction(
   action: ActionName,
   params: Record<string, unknown>,
 ): Promise<unknown> {
-  const chatId = String(params.chatId ?? params.chat_id ?? "");
+  const chatId = await resolveTargetChatId(client, params);
   const postId = String(params.postId ?? params.post_id ?? params.messageId ?? "");
   const text = String(params.text ?? params.message ?? "");
 

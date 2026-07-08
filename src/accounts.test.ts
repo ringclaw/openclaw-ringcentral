@@ -16,12 +16,16 @@ describe("resolveAccount", () => {
     process.env = { ...origEnv };
   });
 
-  it("resolves bot config with Hermes defaults", () => {
+  it("resolves bot config with RingCentral defaults", () => {
     const account = resolveAccount({ botToken: "bot-token-123" });
     expect(account.botToken).toBe("bot-token-123");
     expect(account.server).toBe("https://platform.ringcentral.com");
     expect(account.replyToMode).toBe("first");
     expect(account.groupPolicy).toBe("disabled");
+    expect(account.dmPolicy).toBe("pairing");
+    expect(account.allowFrom).toEqual([]);
+    expect(account.groupDmEnabled).toBe(false);
+    expect(account.groupDmChannels).toEqual({});
     expect(account.requireMention).toBe(true);
     expect(account.requireMentionExplicit).toBe(false);
     expect(account.attachments).toEqual({
@@ -34,21 +38,51 @@ describe("resolveAccount", () => {
     expect(account.ownerCredentials).toBeUndefined();
   });
 
-  it("resolves from RC_* env", () => {
+  it("resolves from new RC_* env", () => {
     process.env.RC_BOT_TOKEN = "env-bot-token";
     process.env.RC_SERVER_URL = "https://sandbox.example.com";
-    process.env.RC_ALLOWED_USER_EMAILS = "Owner@Example.com, teammate@example.com";
+    process.env.RC_ALLOW_FROM = "u1,u2";
+    process.env.RC_DM_POLICY = "allowlist";
+    process.env.RC_GROUP_POLICY = "allowlist";
+    process.env.RC_TEAMS = JSON.stringify({ t1: { allow: true } });
+    process.env.RC_GROUP_DM_ENABLED = "true";
+    process.env.RC_GROUP_DM_CHANNELS = JSON.stringify({ g1: { allow: true, users: ["u1"] } });
     process.env.RC_REPLY_TO_MODE = "all";
     process.env.RC_REQUIRE_MENTION = "false";
     process.env.RC_DEBUG_INBOUND_MESSAGES = "true";
+
     const account = resolveAccount({});
+
     expect(account.botToken).toBe("env-bot-token");
     expect(account.server).toBe("https://sandbox.example.com");
-    expect(account.allowedUserEmails).toEqual(["owner@example.com", "teammate@example.com"]);
+    expect(account.allowFrom).toEqual(["u1", "u2"]);
+    expect(account.dmPolicy).toBe("allowlist");
+    expect(account.groupPolicy).toBe("allowlist");
+    expect(account.config.teams).toEqual({ t1: { allow: true } });
+    expect(account.groupDmEnabled).toBe(true);
+    expect(account.groupDmChannels).toEqual({ g1: { allow: true, users: ["u1"] } });
     expect(account.replyToMode).toBe("all");
     expect(account.requireMention).toBe(false);
     expect(account.requireMentionExplicit).toBe(true);
     expect(account.debugInboundMessages).toBe(true);
+  });
+
+  it("applies RC_TEAM_REQUIRE_MENTION to wildcard team defaults", () => {
+    const account = resolveAccount(
+      { botToken: "bot", teams: { t1: { allow: true } } },
+      { RC_TEAM_REQUIRE_MENTION: "false" },
+    );
+    expect(account.config.teams).toEqual({
+      t1: { allow: true },
+      "*": { requireMention: false },
+    });
+  });
+
+  it("requires wildcard allowFrom for public DMs", () => {
+    expect(() => resolveAccount({ botToken: "bot", dmPolicy: "open" })).toThrow(
+      'dmPolicy="open" requires allowFrom',
+    );
+    expect(resolveAccount({ botToken: "bot", dmPolicy: "open", allowFrom: ["*"] }).dmPolicy).toBe("open");
   });
 
   it("keeps processing placeholder opt-in via config or RC_* env", () => {
@@ -73,7 +107,25 @@ describe("resolveAccount", () => {
     expect(isAccountConfigured({})).toBe(false);
   });
 
-  it("resolves ownerCredentials and deprecated config alias", () => {
+  it("rejects legacy config fields", () => {
+    expect(() => resolveAccount({ botToken: "bot", allowedUserEmails: ["owner@example.com"] } as any)).toThrow(
+      "allowedUserEmails",
+    );
+    expect(() => resolveAccount({ botToken: "bot", groups: { g1: { enabled: true } } } as any)).toThrow(
+      "groups",
+    );
+    expect(() => resolveAccount({ botToken: "bot", dm: { policy: "open" } } as any)).toThrow(
+      "dm.policy",
+    );
+  });
+
+  it("rejects legacy RC_* env fields", () => {
+    process.env.RC_BOT_TOKEN = "bot";
+    process.env.RC_ALLOWED_USER_EMAILS = "owner@example.com";
+    expect(() => resolveAccount({})).toThrow("RC_ALLOWED_USER_EMAILS");
+  });
+
+  it("resolves ownerCredentials and deprecated credentials alias", () => {
     const primary = resolveAccount({
       botToken: "bot",
       ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" },
@@ -85,18 +137,6 @@ describe("resolveAccount", () => {
       credentials: { clientId: "id2", clientSecret: "secret2", jwt: "jwt2" },
     });
     expect(alias.ownerCredentials).toEqual({ clientId: "id2", clientSecret: "secret2", jwt: "jwt2" });
-  });
-
-  it("uses owner-only effective DM default when owner credentials are configured", () => {
-    const account = resolveAccount({
-      botToken: "bot",
-      ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" },
-    });
-    expect(account.dmPolicy).toBe("allowlist");
-  });
-
-  it("keeps bot-only DM default open", () => {
-    expect(resolveAccount({ botToken: "bot" }).dmPolicy).toBe("open");
   });
 
   it("resolves debug inbound message logging from config", () => {

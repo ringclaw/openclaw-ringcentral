@@ -19,7 +19,7 @@ import { chunkText } from "./markdown.js";
 import { RingCentralWebSocketMonitor } from "./monitor.js";
 import { sendMessage } from "./send.js";
 import { DEFAULT_TEXT_CHUNK_LIMIT, RINGCENTRAL_CHANNEL_ID } from "./shared.js";
-import { extractChatId, normalizeTarget, parseTarget } from "./targets.js";
+import { normalizeTarget, parseTarget } from "./targets.js";
 import { resolveReplyTransport, ThreadParticipationTracker } from "./threading.js";
 import type { ResolvedAccount } from "./types.js";
 
@@ -78,7 +78,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
       configured: !!account.botToken,
       statusState: account.botToken ? "configured" : "not configured",
       dmPolicy: account.dmPolicy,
-      allowFrom: account.config.dm?.allowFrom?.map(String),
+      allowFrom: account.allowFrom,
       tokenSource: account.config.botToken ? "config" : "env:RC_BOT_TOKEN",
       credentialSource: hasOwnerCredentials(account) ? "owner credentials" : "none",
     }),
@@ -169,18 +169,20 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
     deliveryMode: "direct",
     textChunkLimit: DEFAULT_TEXT_CHUNK_LIMIT,
     sendText: async (outCtx: ChannelOutboundContext) => {
-      const chatId = extractChatId(outCtx.to);
-      if (!chatId) {
+      const account = resolveAccount(getRcConfig(outCtx.cfg));
+      const botClient = createBotClient(account.server, account.botToken);
+      const ownerClient = createOwnerClientFromAccount(account);
+      let chatId: string;
+      try {
+        chatId = await resolveOutboundChatId(outCtx.to, botClient, ownerClient);
+      } catch (err) {
         return {
           ok: false,
-          error: new Error(`Invalid target: ${outCtx.to}`),
+          error: err instanceof Error ? err : new Error(String(err)),
           channel: RINGCENTRAL_CHANNEL_ID,
           messageId: "",
         } as never;
       }
-      const account = resolveAccount(getRcConfig(outCtx.cfg));
-      const botClient = createBotClient(account.server, account.botToken);
-      const ownerClient = createOwnerClientFromAccount(account);
       const state = stateFor(outCtx.accountId ?? "default");
       let lastPostId = "";
       for (const chunk of chunkText(outCtx.text ?? "", account.textChunkLimit ?? DEFAULT_TEXT_CHUNK_LIMIT)) {
@@ -207,20 +209,24 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
       return { ok: true, channel: RINGCENTRAL_CHANNEL_ID, messageId: lastPostId } as never;
     },
     sendMedia: async (outCtx: ChannelOutboundContext) => {
-      const chatId = extractChatId(outCtx.to);
-      if (!chatId) {
+      const account = resolveAccount(getRcConfig(outCtx.cfg));
+      const botClient = createBotClient(account.server, account.botToken);
+      const ownerClient = createOwnerClientFromAccount(account);
+      let chatId: string;
+      try {
+        chatId = await resolveOutboundChatId(outCtx.to, botClient, ownerClient);
+      } catch (err) {
         return {
           ok: false,
-          error: new Error(`Invalid target: ${outCtx.to}`),
+          error: err instanceof Error ? err : new Error(String(err)),
           channel: RINGCENTRAL_CHANNEL_ID,
           messageId: "",
         } as never;
       }
-      const account = resolveAccount(getRcConfig(outCtx.cfg));
       const state = stateFor(outCtx.accountId ?? "default");
       const result = await sendMessage({
-        client: createBotClient(account.server, account.botToken),
-        fallbackClient: createOwnerClientFromAccount(account),
+        client: botClient,
+        fallbackClient: ownerClient,
         chatId,
         mediaUrl: outCtx.mediaUrl,
         replyToId: outCtx.replyToId,
@@ -266,20 +272,20 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
     normalizeTarget: (raw: string) => normalizeTarget(raw),
     inferTargetChatType: ({ to }) => {
       const parsed = parseTarget(to);
-      if (parsed?.kind === "dm" || parsed?.kind === "user") {
+      if (parsed?.kind === "user") {
         return "direct";
       }
-      if (parsed?.kind === "channel") {
+      if (parsed?.kind === "channel" || parsed?.kind === "team") {
         return "channel";
       }
-      if (parsed?.kind === "group" || parsed?.kind === "chat") {
+      if (parsed?.kind === "group") {
         return "group";
       }
       return undefined;
     },
     targetResolver: {
-      looksLikeId: (raw) => !!extractChatId(raw),
-      hint: "ringcentral:<dm|group|channel|chat>:<id>",
+      looksLikeId: (raw) => !!parseTarget(raw),
+      hint: "user:<personId>|team:<chatId>|group:<chatId>|channel:<chatId>",
     },
   },
 
@@ -301,9 +307,10 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
     },
     listGroups: async ({ cfg, limit }) => {
       const account = resolveAccount(getRcConfig(cfg));
-      return (account.allowedChannels.length ? account.allowedChannels : Object.keys(account.config.groups ?? {}))
+      return Object.keys(account.config.teams ?? {})
+        .filter((id) => id !== "*")
         .slice(0, limit ?? 50)
-        .map((id) => ({ kind: "group", id, name: id }));
+        .map((id) => ({ kind: "channel", id, name: id }));
     },
   },
 
@@ -328,7 +335,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
       connected: runtime?.connected,
       label: account.config.name ?? "RingCentral",
       dmPolicy: account.dmPolicy,
-      allowFrom: account.config.dm?.allowFrom?.map(String),
+      allowFrom: account.allowFrom,
       credentialSource: hasOwnerCredentials(account) ? "owner credentials" : "none",
     }) as never,
   },
@@ -358,6 +365,30 @@ function createOwnerClientFromAccount(account: ResolvedAccount): RingCentralClie
 
 function createPreferredReadClient(account: ResolvedAccount): RingCentralClient {
   return createOwnerClientFromAccount(account) ?? createBotClient(account.server, account.botToken);
+}
+
+async function resolveOutboundChatId(
+  target: string,
+  botClient: RingCentralClient,
+  ownerClient?: RingCentralClient,
+): Promise<string> {
+  const parsed = parseTarget(target);
+  if (!parsed) {
+    throw new Error(
+      `Invalid RingCentral target "${target}". Use user:<personId>, team:<chatId>, group:<chatId>, or channel:<chatId>.`,
+    );
+  }
+  if (parsed.kind !== "user") {
+    return parsed.id;
+  }
+  try {
+    return (await botClient.createOrFindDm([parsed.id])).id;
+  } catch (err) {
+    if (ownerClient) {
+      return (await ownerClient.createOrFindDm([parsed.id])).id;
+    }
+    throw err;
+  }
 }
 
 async function resolvePersonId(client: RingCentralClient): Promise<string | undefined> {

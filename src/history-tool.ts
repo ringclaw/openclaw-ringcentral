@@ -114,7 +114,11 @@ async function resolveHistoryTarget(params: {
     return { chatId: mentioned.groups.id, label: target };
   }
   const parsed = parseTarget(target);
-  if (parsed && parsed.kind !== "dm" && parsed.kind !== "user") {
+  if (parsed?.kind === "user") {
+    const chat = await params.client.createOrFindDm([parsed.id]);
+    return { chatId: chat.id, label: parsed.id };
+  }
+  if (parsed) {
     return { chatId: parsed.id, label: target };
   }
   const chatId = extractChatId(target);
