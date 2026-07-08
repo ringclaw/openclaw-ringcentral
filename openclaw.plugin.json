@@ -1,7 +1,7 @@
 {
   "id": "openclaw-ringcentral",
   "name": "RingCentral",
-  "description": "OpenClaw RingCentral Team Messaging channel plugin with allowlisted bot-token artifact tools",
+  "description": "RingCentral Team Messaging for OpenClaw with DM, Team, Group DM, and artifact tools",
   "channels": [
     "ringcentral"
   ],
@@ -97,6 +97,7 @@
     },
     "ownerCredentials": {
       "label": "Owner Credentials (optional)",
+      "help": "Optional owner JWT credentials for recent history and Home-confirmed note/calendar operations.",
       "advanced": true
     },
     "ownerCredentials.clientId": {
@@ -160,6 +161,7 @@
     },
     "homeChannel": {
       "label": "Home Channel",
+      "help": "Default Home chat for history/artifact tools and owner confirmation flows.",
       "advanced": true
     },
     "homeChannelName": {
@@ -173,7 +175,7 @@
     },
     "groupPolicy": {
       "label": "Team Policy",
-      "help": "Controls RingCentral Team/Everyone chats: disabled, allowlist, or open. Team messages are mention-gated by default."
+      "help": "Controls RingCentral Team/Everyone chats: disabled, allowlist, or open. Explicit Team allowlists can authorize artifact bot-token tools."
     },
     "requireMention": {
       "label": "Require @Mention (Global)",
@@ -206,15 +208,15 @@
     },
     "actions.events": {
       "label": "Events",
-      "help": "Calendar event tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
+      "help": "Calendar event tools. Explicit or current allowlisted chats use the bot token directly; non-allowlisted owner-backed writes keep Home confirmation."
     },
     "actions.notes": {
       "label": "Notes",
-      "help": "Note tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
+      "help": "Note tools. Explicit or current allowlisted chats use the bot token directly; non-allowlisted owner-backed writes keep Home confirmation."
     },
     "actions.adaptiveCards": {
       "label": "Adaptive Cards",
-      "help": "Adaptive Card tools use the bot token in Home or explicitly allowlisted chats."
+      "help": "Adaptive Card tools use the bot token in Home or explicit/current allowlisted chats."
     },
     "dmPolicy": {
       "label": "DM Policy",
@@ -231,7 +233,7 @@
     },
     "teams": {
       "label": "Allowed Teams",
-      "help": "RingCentral Team/Everyone chat configurations keyed by chat ID. Use \"*\" only for defaults."
+      "help": "RingCentral Team/Everyone chat configurations keyed by chat ID. Use \"*\" only for defaults; it is not an artifact allowlist entry."
     },
     "teams.*": {
       "label": "Team Configuration"
@@ -252,12 +254,12 @@
     },
     "dm.groupEnabled": {
       "label": "Enable Group DMs",
-      "help": "Allow explicitly configured RingCentral Group conversations.",
+      "help": "Enable only explicitly configured RingCentral Group DM conversations.",
       "advanced": true
     },
     "dm.groupChannels": {
       "label": "Allowed Group DMs",
-      "help": "RingCentral Group conversation configurations keyed by chat ID.",
+      "help": "Explicit RingCentral Group DM configurations keyed by chat ID; allowlisted entries can authorize artifact bot-token tools.",
       "advanced": true
     },
     "dm.groupChannels.*": {
@@ -536,7 +538,7 @@
   "channelConfigs": {
     "ringcentral": {
       "label": "RingCentral",
-      "description": "OpenClaw RingCentral Team Messaging channel plugin",
+      "description": "RingCentral Team Messaging for OpenClaw with DM, Team, Group DM, and artifact tools",
       "recommendedAgent": {
         "id": "ringcentral-bot",
         "model": null,
@@ -821,6 +823,7 @@
         },
         "ownerCredentials": {
           "label": "Owner Credentials (optional)",
+          "help": "Optional owner JWT credentials for recent history and Home-confirmed note/calendar operations.",
           "advanced": true
         },
         "ownerCredentials.clientId": {
@@ -884,6 +887,7 @@
         },
         "homeChannel": {
           "label": "Home Channel",
+          "help": "Default Home chat for history/artifact tools and owner confirmation flows.",
           "advanced": true
         },
         "homeChannelName": {
@@ -897,7 +901,7 @@
         },
         "groupPolicy": {
           "label": "Team Policy",
-          "help": "Controls RingCentral Team/Everyone chats: disabled, allowlist, or open. Team messages are mention-gated by default."
+          "help": "Controls RingCentral Team/Everyone chats: disabled, allowlist, or open. Explicit Team allowlists can authorize artifact bot-token tools."
         },
         "requireMention": {
           "label": "Require @Mention (Global)",
@@ -930,15 +934,15 @@
         },
         "actions.events": {
           "label": "Events",
-          "help": "Calendar event tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
+          "help": "Calendar event tools. Explicit or current allowlisted chats use the bot token directly; non-allowlisted owner-backed writes keep Home confirmation."
         },
         "actions.notes": {
           "label": "Notes",
-          "help": "Note tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
+          "help": "Note tools. Explicit or current allowlisted chats use the bot token directly; non-allowlisted owner-backed writes keep Home confirmation."
         },
         "actions.adaptiveCards": {
           "label": "Adaptive Cards",
-          "help": "Adaptive Card tools use the bot token in Home or explicitly allowlisted chats."
+          "help": "Adaptive Card tools use the bot token in Home or explicit/current allowlisted chats."
         },
         "dmPolicy": {
           "label": "DM Policy",
@@ -955,7 +959,7 @@
         },
         "teams": {
           "label": "Allowed Teams",
-          "help": "RingCentral Team/Everyone chat configurations keyed by chat ID. Use \"*\" only for defaults."
+          "help": "RingCentral Team/Everyone chat configurations keyed by chat ID. Use \"*\" only for defaults; it is not an artifact allowlist entry."
         },
         "teams.*": {
           "label": "Team Configuration"
@@ -976,12 +980,12 @@
         },
         "dm.groupEnabled": {
           "label": "Enable Group DMs",
-          "help": "Allow explicitly configured RingCentral Group conversations.",
+          "help": "Enable only explicitly configured RingCentral Group DM conversations.",
           "advanced": true
         },
         "dm.groupChannels": {
           "label": "Allowed Group DMs",
-          "help": "RingCentral Group conversation configurations keyed by chat ID.",
+          "help": "Explicit RingCentral Group DM configurations keyed by chat ID; allowlisted entries can authorize artifact bot-token tools.",
           "advanced": true
         },
         "dm.groupChannels.*": {

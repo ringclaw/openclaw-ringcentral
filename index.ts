@@ -9,7 +9,7 @@ import { setRingCentralRuntime } from "./src/runtime.js";
 const plugin = {
   id: "openclaw-ringcentral",
   name: "RingCentral",
-  description: "OpenClaw RingCentral Team Messaging channel plugin",
+  description: "RingCentral Team Messaging for OpenClaw with DM, Team, Group DM, and artifact tools",
   configSchema: buildChannelConfigSchema(ringCentralConfigSchema),
   register(api: OpenClawPluginApi) {
     setRingCentralRuntime(api.runtime);
