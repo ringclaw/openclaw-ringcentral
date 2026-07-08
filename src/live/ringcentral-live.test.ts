@@ -1315,7 +1315,7 @@ async function readHistoryToolText(params: {
     },
   });
   const result = await tool.execute("ringcentral-live-smoke", {
-    target: `ringcentral:chat:${params.chatId}`,
+    target: `channel:${params.chatId}`,
     target_type: "chat",
     record_count: params.recordCount,
   });
