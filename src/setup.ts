@@ -4,5 +4,5 @@ export const ringcentralSetupWizard = {
   id: "ringcentral",
   label: "RingCentral",
   description:
-    "Configure RingCentral Team Messaging with RC_BOT_TOKEN and optional RC_USER_* owner credentials.",
+    "Configure RingCentral Team Messaging with a bot token, optional owner credentials, and explicit Team/Group allowlists.",
 };

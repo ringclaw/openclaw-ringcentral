@@ -19,3 +19,7 @@ export function getRingCentralRuntime(): PluginRuntime {
 export function tryGetRingCentralRuntime(): PluginRuntime | null {
   return _runtime;
 }
+
+export function __setRingCentralRuntimeForTest(runtime: PluginRuntime | null): void {
+  _runtime = runtime;
+}
