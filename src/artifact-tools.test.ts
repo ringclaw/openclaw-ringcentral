@@ -5,6 +5,7 @@ import {
   createRingCentralArtifactTools,
   RINGCENTRAL_ARTIFACT_TOOL_NAMES,
 } from "./artifact-tools.js";
+import { __setRingCentralRuntimeForTest } from "./runtime.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -58,6 +59,8 @@ function findTool(config: unknown, name: string) {
 beforeEach(() => {
   mockFetch.mockReset();
   __testing.pendingConfirmations.clear();
+  __setRingCentralRuntimeForTest(null);
+  vi.unstubAllEnvs();
 });
 
 describe("RingCentral artifact tools", () => {
@@ -85,6 +88,7 @@ describe("RingCentral artifact tools", () => {
       expect(manifest.contracts.tools).toContain(toolName);
       expect(manifest.toolMetadata[toolName]).toEqual({ optional: true });
     }
+    expect(manifest.hooks).toContain("before_tool_call");
   });
 
   it("creates an Adaptive Card in the configured Home chat with the bot token", async () => {
@@ -173,6 +177,66 @@ describe("RingCentral artifact tools", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({ Authorization: "Bearer bot-token" }),
+      }),
+    );
+  });
+
+  it("resolves JSON allowlists from runtime full config when channel tools receive agent config", async () => {
+    __setRingCentralRuntimeForTest({
+      config: {
+        current: () => allowlistedCfg,
+      },
+    } as any);
+    const agentCfg = { tools: { allow: ["ringcentral_create_adaptive_card"] } };
+    const tool = findTool(agentCfg, "ringcentral_create_adaptive_card");
+    mockFetch.mockResolvedValueOnce(jsonResponse({ id: "card-runtime", type: "AdaptiveCard" }));
+
+    const result = await tool.execute("call-1", { chat_id: "team-1", text: "runtime" } as any);
+
+    expect(result.details).toMatchObject({ success: true, card_id: "card-runtime" });
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.example.com/team-messaging/v1/chats/team-1/adaptive-cards",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer bot-token" }),
+      }),
+    );
+  });
+
+  it("resolves artifact allowlists from existing RC_TEAMS and RC_GROUP_DM_CHANNELS env fallbacks", async () => {
+    vi.stubEnv("RC_BOT_TOKEN", "env-bot-token");
+    vi.stubEnv("RC_SERVER_URL", "https://api.example.com");
+    vi.stubEnv("RC_TEAMS", JSON.stringify({ "env-team": { allow: true } }));
+    vi.stubEnv("RC_GROUP_DM_CHANNELS", JSON.stringify({ "env-group-dm": { allow: true } }));
+    const tools = createRingCentralArtifactTools({ tools: { allow: ["ringcentral_create_note"] } });
+    const createNote = tools.find((candidate) => candidate.name === "ringcentral_create_note")!;
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ id: "note-env-team", title: "Team" }))
+      .mockResolvedValueOnce(jsonResponse({ id: "note-env-group-dm", title: "Group DM" }));
+
+    const teamResult = await createNote.execute("call-1", {
+      chat_id: "env-team",
+      title: "Team Note",
+    } as any);
+    const groupResult = await createNote.execute("call-2", {
+      chat_id: "env-group-dm",
+      title: "Group DM Note",
+    } as any);
+
+    expect(teamResult.details).toMatchObject({ success: true, note_id: "note-env-team" });
+    expect(groupResult.details).toMatchObject({ success: true, note_id: "note-env-group-dm" });
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.example.com/team-messaging/v1/chats/env-team/notes",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer env-bot-token" }),
+      }),
+    );
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.example.com/team-messaging/v1/chats/env-group-dm/notes",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer env-bot-token" }),
       }),
     );
   });

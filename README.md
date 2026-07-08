@@ -335,11 +335,19 @@ only the tools your RingCentral agent should use through `tools.allow`.
 `chat_id` is used only as the authorization context; the RingCentral API still
 operates on the object ID.
 
+When an artifact tool runs from a RingCentral group or team session and no
+explicit `chat_id`/`chatId`/`target` is provided, the plugin injects the current
+RingCentral chat ID before the tool call. Explicit targets always win. If the
+current session is not a RingCentral group/team session, the Home fallback above
+still applies.
+
 If the target chat is explicitly allowlisted with
 `teams.<chatId>.allow=true` or `dm.groupChannels.<chatId>.allow=true`, artifact
-tools use the bot token directly. `teams."*"` is only a defaults entry and does
-not authorize artifact writes or reads. Bot-token artifact failures are returned
-directly and do not fall back to owner credentials.
+tools use the bot token directly. The allowlist can come from config or the
+existing `RC_TEAMS` / `RC_GROUP_DM_CHANNELS` env fallbacks. `teams."*"` is only
+a defaults entry and does not authorize artifact writes or reads. Bot-token
+artifact failures are returned directly and do not fall back to owner
+credentials.
 
 For non-allowlisted targets, owner-backed note and calendar tools keep the
 existing Home behavior: Home chat operations run with owner credentials, and

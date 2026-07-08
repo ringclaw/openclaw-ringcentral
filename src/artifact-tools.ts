@@ -2,10 +2,17 @@ import { randomBytes } from "node:crypto";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
 import { Type } from "typebox";
-import { getRcConfig, hasOwnerCredentials, resolveAccount } from "./accounts.js";
+import { hasOwnerCredentials, resolveAccount } from "./accounts.js";
 import { createBotClient, createOwnerClient, type RingCentralClient } from "./client.js";
+import { tryGetRingCentralRuntime } from "./runtime.js";
 import { extractChatId } from "./targets.js";
-import type { CreateAdaptiveCardRequest, CreateEventRequest, CreateNoteRequest, ResolvedAccount } from "./types.js";
+import type {
+  CreateAdaptiveCardRequest,
+  CreateEventRequest,
+  CreateNoteRequest,
+  ResolvedAccount,
+  RingCentralConfig,
+} from "./types.js";
 
 type ArtifactPendingAction =
   | {
@@ -647,7 +654,7 @@ function cleanExpiredPendingConfirmations(): void {
 }
 
 function resolveArtifactAccount(cfg: unknown) {
-  return resolveAccount(getRcConfig(cfg ?? {}));
+  return resolveAccount(resolveArtifactChannelConfig(cfg));
 }
 
 function resolveArtifactTarget(cfg: unknown, params: Record<string, unknown>): {
@@ -704,6 +711,47 @@ function formatError(err: unknown): string {
 
 function resolveToolChatId(params: Record<string, unknown>, fallback?: string): string | undefined {
   return readChatId(params.chat_id ?? params.chatId ?? params.target) ?? fallback;
+}
+
+function resolveArtifactChannelConfig(cfg: unknown): RingCentralConfig {
+  const localConfig = readRingCentralChannelConfig(cfg);
+  if (localConfig) return localConfig;
+  const runtime = tryGetRingCentralRuntime();
+  if (!runtime) return {};
+  try {
+    return readRingCentralChannelConfig(runtime.config.current()) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function readRingCentralChannelConfig(cfg: unknown): RingCentralConfig | undefined {
+  if (!isRecord(cfg)) return undefined;
+  const channels = cfg.channels;
+  if (isRecord(channels) && Object.prototype.hasOwnProperty.call(channels, "ringcentral")) {
+    return (channels.ringcentral ?? {}) as RingCentralConfig;
+  }
+  if (looksLikeRingCentralChannelConfig(cfg)) {
+    return cfg as RingCentralConfig;
+  }
+  return undefined;
+}
+
+function looksLikeRingCentralChannelConfig(value: Record<string, unknown>): boolean {
+  return [
+    "botToken",
+    "ownerCredentials",
+    "credentials",
+    "server",
+    "botExtensionId",
+    "dmPolicy",
+    "allowFrom",
+    "groupPolicy",
+    "teams",
+    "dm",
+    "homeChannel",
+    "homeChannelName",
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
 function readChatId(value: unknown): string | undefined {

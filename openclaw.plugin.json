@@ -5,6 +5,9 @@
   "channels": [
     "ringcentral"
   ],
+  "hooks": [
+    "before_tool_call"
+  ],
   "contracts": {
     "tools": [
       "ringcentral_get_recent_messages",
