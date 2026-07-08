@@ -1,7 +1,7 @@
 {
   "id": "openclaw-ringcentral",
   "name": "RingCentral",
-  "description": "OpenClaw RingCentral Team Messaging channel plugin",
+  "description": "OpenClaw RingCentral Team Messaging channel plugin with allowlisted bot-token artifact tools",
   "channels": [
     "ringcentral"
   ],
@@ -202,13 +202,16 @@
       "label": "Tasks"
     },
     "actions.events": {
-      "label": "Events"
+      "label": "Events",
+      "help": "Calendar event tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
     },
     "actions.notes": {
-      "label": "Notes"
+      "label": "Notes",
+      "help": "Note tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
     },
     "actions.adaptiveCards": {
-      "label": "Adaptive Cards"
+      "label": "Adaptive Cards",
+      "help": "Adaptive Card tools use the bot token in Home or explicitly allowlisted chats."
     },
     "dmPolicy": {
       "label": "DM Policy",
@@ -923,13 +926,16 @@
           "label": "Tasks"
         },
         "actions.events": {
-          "label": "Events"
+          "label": "Events",
+          "help": "Calendar event tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
         },
         "actions.notes": {
-          "label": "Notes"
+          "label": "Notes",
+          "help": "Note tools. Explicitly allowlisted chats use the bot token directly; other owner-backed writes keep Home confirmation."
         },
         "actions.adaptiveCards": {
-          "label": "Adaptive Cards"
+          "label": "Adaptive Cards",
+          "help": "Adaptive Card tools use the bot token in Home or explicitly allowlisted chats."
         },
         "dmPolicy": {
           "label": "DM Policy",

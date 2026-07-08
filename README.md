@@ -323,6 +323,31 @@ The shared OpenClaw `message` tool exposes these RingCentral actions when config
 
 The optional `ringcentral_get_recent_messages` tool reads recent messages through owner credentials. Enable it explicitly with `tools.allow`.
 
+## Artifact Tools
+
+Optional artifact tools include Adaptive Cards, notes, and calendar events. Enable
+only the tools your RingCentral agent should use through `tools.allow`.
+
+`chat_id` selects the target chat. When omitted, tools fall back to
+`homeChannel`/`RC_HOME_CHANNEL`. For object-ID tools such as
+`ringcentral_get_note`, `ringcentral_update_note`,
+`ringcentral_get_calendar_event`, and `ringcentral_delete_adaptive_card`,
+`chat_id` is used only as the authorization context; the RingCentral API still
+operates on the object ID.
+
+If the target chat is explicitly allowlisted with
+`teams.<chatId>.allow=true` or `dm.groupChannels.<chatId>.allow=true`, artifact
+tools use the bot token directly. `teams."*"` is only a defaults entry and does
+not authorize artifact writes or reads. Bot-token artifact failures are returned
+directly and do not fall back to owner credentials.
+
+For non-allowlisted targets, owner-backed note and calendar tools keep the
+existing Home behavior: Home chat operations run with owner credentials, and
+non-Home writes require `ringcentral_confirm_artifact_action` from the
+configured Home DM. Owner-backed reads outside Home are rejected. Adaptive Card
+tools remain bot-token tools and require either Home or an explicitly
+allowlisted target chat.
+
 ## Verification
 
 ```bash

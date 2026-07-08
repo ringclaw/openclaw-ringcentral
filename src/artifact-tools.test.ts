@@ -34,6 +34,27 @@ const cfg = {
   },
 };
 
+const allowlistedCfg = {
+  channels: {
+    ringcentral: {
+      ...cfg.channels.ringcentral,
+      teams: {
+        "team-1": { allow: true },
+      },
+      dm: {
+        groupEnabled: true,
+        groupChannels: {
+          "group-dm-1": { allow: true },
+        },
+      },
+    },
+  },
+};
+
+function findTool(config: unknown, name: string) {
+  return createRingCentralArtifactTools(config).find((candidate) => candidate.name === name)!;
+}
+
 beforeEach(() => {
   mockFetch.mockReset();
   __testing.pendingConfirmations.clear();
@@ -66,24 +87,137 @@ describe("RingCentral artifact tools", () => {
     }
   });
 
-  it("rejects Adaptive Card writes outside the configured Home chat", async () => {
-    const tool = createRingCentralArtifactTools(cfg).find(
-      (candidate) => candidate.name === "ringcentral_create_adaptive_card",
-    )!;
+  it("creates an Adaptive Card in the configured Home chat with the bot token", async () => {
+    const tool = findTool(cfg, "ringcentral_create_adaptive_card");
+    mockFetch.mockResolvedValueOnce(jsonResponse({ id: "card-home", type: "AdaptiveCard" }));
+
+    const result = await tool.execute("call-1", { text: "hello" } as any);
+
+    expect(result.details).toMatchObject({ success: true, card_id: "card-home" });
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.example.com/team-messaging/v1/chats/home-dm/adaptive-cards",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer bot-token" }),
+      }),
+    );
+  });
+
+  it("uses the bot token directly for allowlisted team artifact tools", async () => {
+    const run = (name: string, args: Record<string, unknown>) =>
+      findTool(allowlistedCfg, name).execute("call-1", args as any);
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ id: "card-1", type: "AdaptiveCard" }))
+      .mockResolvedValueOnce(jsonResponse({ id: "card-1", type: "AdaptiveCard" }))
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({ records: [{ id: "note-1", title: "Note" }] }))
+      .mockResolvedValueOnce(jsonResponse({ id: "note-2", title: "Note" }))
+      .mockResolvedValueOnce(jsonResponse({ id: "note-2", title: "Note" }))
+      .mockResolvedValueOnce(jsonResponse({ id: "note-2", title: "Updated" }))
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({ records: [{ id: "event-1", title: "Event" }] }))
+      .mockResolvedValueOnce(jsonResponse({ id: "event-2", title: "Event" }))
+      .mockResolvedValueOnce(jsonResponse({ id: "event-2", title: "Event" }))
+      .mockResolvedValueOnce(jsonResponse({ id: "event-2", title: "Updated" }))
+      .mockResolvedValueOnce(jsonResponse({}));
+
+    await run("ringcentral_create_adaptive_card", { chat_id: "team-1", text: "card" });
+    await run("ringcentral_update_adaptive_card", { chat_id: "team-1", card_id: "card-1", text: "card" });
+    await run("ringcentral_delete_adaptive_card", { chat_id: "team-1", card_id: "card-1" });
+    await run("ringcentral_list_notes", { chat_id: "team-1" });
+    await run("ringcentral_create_note", { chat_id: "team-1", title: "Note" });
+    await run("ringcentral_get_note", { chat_id: "team-1", note_id: "note-2" });
+    await run("ringcentral_update_note", { chat_id: "team-1", note_id: "note-2", title: "Updated" });
+    await run("ringcentral_delete_note", { chat_id: "team-1", note_id: "note-2" });
+    await run("ringcentral_publish_note", { chat_id: "team-1", note_id: "note-2" });
+    await run("ringcentral_list_calendar_events", { chat_id: "team-1" });
+    await run("ringcentral_create_calendar_event", {
+      chat_id: "team-1",
+      title: "Event",
+      start_time: "2026-06-04T10:00:00Z",
+      end_time: "2026-06-04T11:00:00Z",
+    });
+    await run("ringcentral_get_calendar_event", { chat_id: "team-1", event_id: "event-2" });
+    await run("ringcentral_update_calendar_event", {
+      chat_id: "team-1",
+      event_id: "event-2",
+      title: "Updated",
+      start_time: "2026-06-04T10:00:00Z",
+      end_time: "2026-06-04T11:00:00Z",
+    });
+    await run("ringcentral_delete_calendar_event", { chat_id: "team-1", event_id: "event-2" });
+
+    const calls = mockFetch.mock.calls;
+    expect(calls).toHaveLength(14);
+    expect(calls.map(([url]) => String(url))).not.toContain("https://api.example.com/restapi/oauth/token");
+    for (const [, init] of calls) {
+      expect(init).toEqual(expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer bot-token" }),
+      }));
+    }
+  });
+
+  it("uses the bot token directly for allowlisted group DM artifact tools", async () => {
+    const tool = findTool(allowlistedCfg, "ringcentral_create_note");
+    mockFetch.mockResolvedValueOnce(jsonResponse({ id: "note-group-dm", title: "Note" }));
+
+    const result = await tool.execute("call-1", {
+      chat_id: "group-dm-1",
+      title: "Group DM Note",
+    } as any);
+
+    expect(result.details).toMatchObject({ success: true, note_id: "note-group-dm" });
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.example.com/team-messaging/v1/chats/group-dm-1/notes",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer bot-token" }),
+      }),
+    );
+  });
+
+  it("does not fall back to owner credentials when the allowlisted bot token path fails", async () => {
+    const tool = findTool(allowlistedCfg, "ringcentral_create_note");
+    mockFetch.mockResolvedValueOnce(jsonResponse({ message: "forbidden" }, 403));
+
+    const result = await tool.execute("call-1", {
+      chat_id: "team-1",
+      title: "Team Note",
+    } as any);
+
+    expect(result.details).toMatchObject({
+      success: false,
+      error: expect.stringContaining("bot token"),
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(String(mockFetch.mock.calls[0]?.[0])).not.toContain("/oauth/token");
+  });
+
+  it("does not treat teams wildcard defaults as artifact allowlist entries", async () => {
+    const wildcardCfg = {
+      channels: {
+        ringcentral: {
+          ...cfg.channels.ringcentral,
+          teams: {
+            "*": { allow: true },
+          },
+        },
+      },
+    };
+    const tool = findTool(wildcardCfg, "ringcentral_create_adaptive_card");
 
     const result = await tool.execute("call-1", { chat_id: "team-1", text: "hello" } as any);
 
     expect(result.details).toMatchObject({
       success: false,
-      error: expect.stringContaining("Home chat"),
+      error: expect.stringContaining("allowlisted"),
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("creates an owner note directly in Home chat", async () => {
-    const tool = createRingCentralArtifactTools(cfg).find(
-      (candidate) => candidate.name === "ringcentral_create_note",
-    )!;
+    const tool = findTool(cfg, "ringcentral_create_note");
     mockFetch
       .mockResolvedValueOnce(jsonResponse({ access_token: "owner-access", expires_in: 3600 }))
       .mockResolvedValueOnce(jsonResponse({ id: "note-1", title: "Note" }));
@@ -181,6 +315,26 @@ describe("RingCentral artifact tools", () => {
     expect(result.details).toMatchObject({
       success: false,
       error: expect.stringContaining("homeChannel"),
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("requires chat_id or homeChannel for object-id artifact tools", async () => {
+    const noHomeCfg = {
+      channels: {
+        ringcentral: {
+          botToken: "bot-token",
+          server: "https://api.example.com",
+        },
+      },
+    };
+    const tool = findTool(noHomeCfg, "ringcentral_get_note");
+
+    const result = await tool.execute("call-1", { note_id: "note-1" } as any);
+
+    expect(result.details).toMatchObject({
+      success: false,
+      error: expect.stringContaining("chat_id"),
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });
