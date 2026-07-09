@@ -23,6 +23,7 @@
   "keywords": ["openclaw", "ringcentral", "team-messaging", "chat", "bot"],
   "files": ["dist", "openclaw.plugin.json", "README.md", "LICENSE"],
   "openclaw": {
+    "extensions": ["./dist/index.js"],
     "runtimeExtensions": ["./dist/index.js"],
     "channel": {
       "id": "ringcentral",
@@ -35,6 +36,7 @@
       "aliases": ["rc", "ringcentral-tm"],
       "order": 56
     },
+    "setupEntry": "./dist/setup-entry.js",
     "runtimeSetupEntry": "./dist/setup-entry.js",
     "install": {
       "npmSpec": "openclaw-ringcentral",
