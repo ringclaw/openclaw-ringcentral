@@ -1,0 +1,25 @@
+name: ClawHub Package Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview the ClawHub package publish without uploading.
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    with:
+      source: ringclaw/openclaw-ringcentral
+      ref: ${{ github.sha }}
+      dry_run: ${{ inputs.dry_run }}
+      tags: latest
+    secrets:
+      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}

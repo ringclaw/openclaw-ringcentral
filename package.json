@@ -41,6 +41,12 @@
     "install": {
       "npmSpec": "openclaw-ringcentral",
       "defaultChoice": "npm"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.28"
+    },
+    "build": {
+      "openclawVersion": "2026.5.28"
     }
   },
   "dependencies": {
