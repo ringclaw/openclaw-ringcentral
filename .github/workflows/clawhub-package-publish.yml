@@ -85,6 +85,8 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          set -euo pipefail
+
           args=(
             package publish .
             --family code-plugin
