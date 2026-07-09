@@ -11,15 +11,104 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
-    with:
-      source: ringclaw/openclaw-ringcentral
-      ref: ${{ github.sha }}
-      dry_run: ${{ inputs.dry_run }}
-      tags: latest
-    secrets:
-      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run typecheck
+        run: pnpm typecheck
+
+      - name: Run build
+        run: pnpm build
+
+      - name: Validate ClawHub package
+        run: npx -y clawhub@0.23.1 package validate .
+
+      - name: Validate publish mode
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          if [[ "$DRY_RUN" == "true" ]]; then
+            exit 0
+          fi
+          if [[ -z "$CLAWHUB_TOKEN" ]]; then
+            echo "::error::Real publishes require the CLAWHUB_TOKEN repository secret."
+            exit 1
+          fi
+
+      - name: Write ClawHub config
+        if: ${{ inputs.dry_run == false }}
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "clawhub-config.json"
+          path.write_text(
+              json.dumps(
+                  {
+                      "registry": "https://clawhub.ai",
+                      "token": os.environ["CLAWHUB_TOKEN"],
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as fh:
+              fh.write(f"CLAWHUB_CONFIG_PATH={path}\n")
+          PY
+
+      - name: Publish package
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(
+            package publish .
+            --family code-plugin
+            --json
+            --tags latest
+            --source-repo "$GITHUB_REPOSITORY"
+            --source-commit "$GITHUB_SHA"
+            --source-ref "$GITHUB_REF"
+          )
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            args+=(--dry-run)
+          else
+            args+=(
+              --manual-override-reason
+              "GitHub Actions workflow_dispatch publish via CLAWHUB_TOKEN"
+            )
+          fi
+
+          npx -y clawhub@0.23.1 "${args[@]}" | tee "$RUNNER_TEMP/package-publish.json"
+
+      - name: Upload publish JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawhub-package-publish-json
+          path: ${{ runner.temp }}/package-publish.json
+          if-no-files-found: error
