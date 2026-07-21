@@ -185,6 +185,61 @@ This is enough for paired DMs and bot-authenticated sends:
 }
 ```
 
+### Conversation Identity (bot / user)
+
+By default replies are sent as the RingCentral bot (`conversationIdentity: "bot"`).
+Set `conversationIdentity: "user"` to send conversation replies as the owner JWT
+account instead (the pre-rewrite personal-account experience).
+
+DM/Team allowlists (`dmPolicy`, `allowFrom`, `groupPolicy`, `teams`,
+`dm.groupChannels`) work the same in both modes.
+
+Pure user-identity config (no bot token):
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "enabled": true,
+      "conversationIdentity": "user",
+      "ownerCredentials": {
+        "clientId": "owner-app-client-id",
+        "clientSecret": "owner-app-client-secret",
+        "jwt": "owner-jwt-token"
+      },
+      "dmPolicy": "allowlist",
+      "allowFrom": ["sender-person-id"],
+      "groupPolicy": "allowlist",
+      "teams": {
+        "123456789": { "allow": true, "requireMention": true }
+      }
+    }
+  }
+}
+```
+
+Dual-account config (bot still receives traffic; owner sends replies):
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "enabled": true,
+      "conversationIdentity": "user",
+      "botToken": "your-bot-static-token",
+      "ownerCredentials": {
+        "clientId": "owner-app-client-id",
+        "clientSecret": "owner-app-client-secret",
+        "jwt": "owner-jwt-token"
+      }
+    }
+  }
+}
+```
+
+In dual-account `user` mode, bot-token failures during send are still attempted
+as a fallback. Adaptive Card tools continue to require a bot token.
+
 ### DM Allowlist
 
 ```json
@@ -417,7 +472,8 @@ ignored.
 
 | Variable | Description |
 | --- | --- |
-| `RC_BOT_TOKEN` | Bot static token |
+| `RC_BOT_TOKEN` | Bot static token (required for `conversationIdentity=bot`) |
+| `RC_CONVERSATION_IDENTITY` | `bot` or `user`; default `bot` |
 | `RC_SERVER_URL` | API server URL, default `https://platform.ringcentral.com` |
 | `RC_USER_CLIENT_ID` | Owner REST API app client ID |
 | `RC_USER_CLIENT_SECRET` | Owner REST API app client secret |
@@ -447,6 +503,7 @@ ignored.
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `conversationIdentity` | `bot` | Send conversation replies as `bot` or owner `user` identity |
 | `dmPolicy` | `pairing` | Direct message handling: `disabled`, `allowlist`, `pairing`, or `open` |
 | `allowFrom` | `[]` | Stable RingCentral person IDs allowed in DMs |
 | `dangerouslyAllowEmailMatching` | `false` | Match `allowFrom` against email aliases |

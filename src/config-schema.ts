@@ -82,6 +82,7 @@ export const ringCentralConfigSchema = z.object({
   botToken: z.string().optional(),
   ownerCredentials: credentialsSchema.optional(),
   credentials: credentialsSchema.optional(),
+  conversationIdentity: z.enum(["bot", "user"]).optional(),
   server: z.string().optional(),
   botExtensionId: z.string().optional(),
   selfOnly: z.boolean().optional(),
