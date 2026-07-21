@@ -5,3 +5,4 @@ dist/
 *.tgz
 coverage
 reports/
+.upgrade-backup/

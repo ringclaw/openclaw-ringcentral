@@ -19,6 +19,7 @@ describe("resolveAccount", () => {
   it("resolves bot config with RingCentral defaults", () => {
     const account = resolveAccount({ botToken: "bot-token-123" });
     expect(account.botToken).toBe("bot-token-123");
+    expect(account.conversationIdentity).toBe("bot");
     expect(account.server).toBe("https://platform.ringcentral.com");
     expect(account.replyToMode).toBe("first");
     expect(account.groupPolicy).toBe("disabled");
@@ -36,6 +37,46 @@ describe("resolveAccount", () => {
     expect(account.processingPlaceholder.enabled).toBe(false);
     expect(account.debugInboundMessages).toBe(false);
     expect(account.ownerCredentials).toBeUndefined();
+  });
+
+  it("allows user identity with owner credentials and optional bot token", () => {
+    const ownerOnly = resolveAccount({
+      conversationIdentity: "user",
+      ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" },
+    });
+    expect(ownerOnly.conversationIdentity).toBe("user");
+    expect(ownerOnly.botToken).toBe("");
+    expect(ownerOnly.ownerCredentials).toEqual({
+      clientId: "id",
+      clientSecret: "secret",
+      jwt: "jwt",
+    });
+
+    const dual = resolveAccount({
+      conversationIdentity: "user",
+      botToken: "bot",
+      ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" },
+    });
+    expect(dual.botToken).toBe("bot");
+    expect(dual.conversationIdentity).toBe("user");
+  });
+
+  it("requires owner credentials for user identity", () => {
+    expect(() => resolveAccount({ conversationIdentity: "user" })).toThrow(
+      'conversationIdentity="user" requires ownerCredentials',
+    );
+  });
+
+  it("still requires bot token for default bot identity", () => {
+    expect(() => resolveAccount({})).toThrow("RC_BOT_TOKEN");
+  });
+
+  it("resolves conversationIdentity from RC_CONVERSATION_IDENTITY", () => {
+    const account = resolveAccount(
+      { ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" } },
+      { RC_CONVERSATION_IDENTITY: "user" },
+    );
+    expect(account.conversationIdentity).toBe("user");
   });
 
   it("resolves from new RC_* env", () => {
@@ -180,6 +221,31 @@ describe("isAccountConfigured", () => {
 
   it("returns true with RC_BOT_TOKEN", () => {
     expect(isAccountConfigured({}, { RC_BOT_TOKEN: "token" })).toBe(true);
+  });
+
+  it("returns true with owner credentials only", () => {
+    expect(
+      isAccountConfigured({
+        ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true with RC_USER_* owner credentials only", () => {
+    expect(
+      isAccountConfigured(
+        {},
+        {
+          RC_USER_CLIENT_ID: "id",
+          RC_USER_CLIENT_SECRET: "secret",
+          RC_USER_JWT_TOKEN: "jwt",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false without bot token or owner credentials", () => {
+    expect(isAccountConfigured({})).toBe(false);
   });
 });
 
