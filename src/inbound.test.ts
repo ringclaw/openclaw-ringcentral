@@ -86,6 +86,14 @@ describe("stripRcMentions", () => {
       }),
     ).toBe("summarize ![:Team](g1)");
   });
+
+  it("strips any configured bot mention id, not the owner send identity", () => {
+    expect(
+      stripRcMentions("![:Person](bot-ext) summarize ![:Person](owner)", ["bot-ext", "bot-person"], {
+        preserveNonBotMentions: true,
+      }),
+    ).toBe("summarize ![:Person](owner)");
+  });
 });
 
 describe("handleInboundPost", () => {
@@ -178,6 +186,121 @@ describe("handleInboundPost", () => {
     expect(drop).toContain('"reasonCode":"activation_skipped"');
     expect(drop).toContain('"groupPolicy":"open"');
     expect(drop).toContain('"requireMention":true');
+  });
+
+  function dualUserAccount() {
+    return resolveAccount({
+      conversationIdentity: "user",
+      botToken: "bot",
+      botExtensionId: "bot-ext",
+      ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" },
+      groupPolicy: "open",
+      requireMention: true,
+      debugInboundMessages: true,
+      processingPlaceholder: { enabled: false },
+    });
+  }
+
+  it("in dual-account user identity mode, @bot still activates requireMention", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    await handleInboundPost({
+      post: makePost({
+        text: "![:Person](bot-ext) need the bot",
+        mentions: [{ id: "bot-ext", type: "Person" }],
+      }),
+      cfg: {},
+      botClient: client,
+      ownerClient: client,
+      account: dualUserAccount(),
+      botPersonId: "bot-person",
+      ownerPersonId: "owner",
+      assistantPersonId: "owner",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(runtime.reply.finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Body: "need the bot",
+        BodyForAgent: "need the bot",
+      }),
+    );
+  });
+
+  it("in dual-account user identity mode, @owner does not activate requireMention", async () => {
+    const runtime = makeRuntime();
+    const log = vi.fn();
+    const client = makeClient();
+    await handleInboundPost({
+      post: makePost({
+        text: "![:Person](owner) hey human",
+        mentions: [{ id: "owner", type: "Person" }],
+      }),
+      cfg: {},
+      botClient: client,
+      ownerClient: client,
+      account: dualUserAccount(),
+      botPersonId: "bot-person",
+      ownerPersonId: "owner",
+      assistantPersonId: "owner",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      log,
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    const drop = loggedMessages(log).find((message) => message.startsWith("[ringcentral] inbound message dropped "));
+    expect(drop).toContain('"reasonCode":"activation_skipped"');
+  });
+
+  it("in dual-account user identity mode, API mentions of the bot person id activate", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    await handleInboundPost({
+      post: makePost({
+        text: "plain text with structured mention",
+        mentions: [{ id: "bot-person", type: "Person" }],
+      }),
+      cfg: {},
+      botClient: client,
+      ownerClient: client,
+      account: dualUserAccount(),
+      botPersonId: "bot-person",
+      ownerPersonId: "owner",
+      assistantPersonId: "owner",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("in pure user identity mode with no bot, @owner still activates", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    await handleInboundPost({
+      post: makePost({
+        text: "![:Person](owner) hey",
+        mentions: [{ id: "owner", type: "Person" }],
+      }),
+      cfg: {},
+      ownerClient: client,
+      account: resolveAccount({
+        conversationIdentity: "user",
+        ownerCredentials: { clientId: "id", clientSecret: "secret", jwt: "jwt" },
+        groupPolicy: "open",
+        requireMention: true,
+        processingPlaceholder: { enabled: false },
+      }),
+      ownerPersonId: "owner",
+      assistantPersonId: "owner",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+    });
+
+    expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
   it("treats tracked RingCentral thread ids as thread follow-ups without another mention", async () => {

@@ -240,6 +240,12 @@ Dual-account config (bot still receives traffic; owner sends replies):
 In dual-account `user` mode, bot-token failures during send are still attempted
 as a fallback. Adaptive Card tools continue to require a bot token.
 
+`requireMention` still matches the RingCentral bot (`botPersonId` /
+`botExtensionId`, including Glip `![:Person](id)` / `post.mentions`). It does
+**not** treat an `@` of the owner JWT person as an activation. Replies continue
+to send as the owner. Pure user-identity configs with no bot token keep matching
+the owner, the only addressable identity.
+
 ### DM Allowlist
 
 ```json

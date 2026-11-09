@@ -138,10 +138,14 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     });
   }
 
+  // requireMention matches the Glip bot, not the send identity. In
+  // conversationIdentity="user" dual-account mode assistantPersonId is the
+  // owner, but @owner must not activate; @bot / botExtensionId must.
+  const mentionTargetIds = resolveActivationMentionIds(inCtx, assistantPersonId);
   const mentionFacts = resolveMentionFacts({
     text,
     mentions: post.mentions,
-    botPersonId: assistantPersonId,
+    mentionTargetIds,
   });
   const routeDescriptors = buildRouteDescriptors({ account, chatId, surface });
   const surfaceConfig = surface.settings;
@@ -229,7 +233,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   // bot-sent post set used by resolveReplyTransport(replyToMode:"first").
   tracker.rememberThread(post.threadId ?? post.parentPostId ?? post.id);
 
-  const bodyForAgent = stripRcMentions(text, assistantPersonId, {
+  const bodyForAgent = stripRcMentions(text, mentionTargetIds, {
     preserveNonBotMentions: chatType === "direct" && !!account.ownerCredentials,
   });
   const mediaPayload = await resolveInboundAttachmentsForAgent({
@@ -361,12 +365,14 @@ function isTrackedThreadFollowup(post: Post, tracker: ThreadParticipationTracker
 
 export function stripRcMentions(
   text: string,
-  botPersonId?: string,
+  botPersonId?: string | readonly string[],
   opts: { preserveNonBotMentions?: boolean } = {},
 ): string {
   if (!text) {
     return text;
   }
+  const mentionTargetIds = normalizeMentionTargetIds(botPersonId);
+  const isTarget = (id: string | undefined) => Boolean(id && mentionTargetIds.has(id));
   let stripped = text.trimStart();
   const leadingWhitespace = text.slice(0, text.length - stripped.length);
 
@@ -377,16 +383,16 @@ export function stripRcMentions(
       if (!match?.groups) {
         break;
       }
-      if (botPersonId && match.groups.id === botPersonId) {
+      if (isTarget(match.groups.id)) {
         addressed = true;
         stripped = stripped.slice(match[0].length).trimStart();
         continue;
       }
       break;
     }
-    if (botPersonId) {
+    if (mentionTargetIds.size > 0) {
       stripped = stripped.replace(RC_TYPED_MENTION_RE, (raw, _type, id) =>
-        id === botPersonId ? "" : raw,
+        isTarget(id) ? "" : raw,
       );
     }
     return addressed ? stripped.trim() : (leadingWhitespace + stripped).trimEnd() || text;
@@ -398,7 +404,7 @@ export function stripRcMentions(
     if (!match?.groups) {
       break;
     }
-    addressed ||= !botPersonId || match.groups.id === botPersonId;
+    addressed ||= mentionTargetIds.size === 0 || isTarget(match.groups.id);
     stripped = stripped.slice(match[0].length).trimStart();
   }
   stripped = stripped.replace(RC_TYPED_MENTION_RE, "").trim();
@@ -744,18 +750,49 @@ function buildRouteDescriptors(params: {
   return routes;
 }
 
+function resolveActivationMentionIds(
+  inCtx: InboundContext,
+  assistantPersonId?: string,
+): string[] {
+  const ids = new Set<string>();
+  const add = (id?: string) => {
+    const trimmed = id?.trim();
+    if (trimmed) {
+      ids.add(trimmed);
+    }
+  };
+  add(inCtx.botPersonId);
+  add(inCtx.account.config.botExtensionId);
+  // Dual-account / bot present: never treat the owner send-identity as a mention.
+  if (ids.size > 0) {
+    return [...ids];
+  }
+  // Pure user mode (no bot token): the owner is the only addressable identity.
+  add(assistantPersonId);
+  add(inCtx.ownerPersonId);
+  return [...ids];
+}
+
+function normalizeMentionTargetIds(botPersonId?: string | readonly string[]): Set<string> {
+  const ids = typeof botPersonId === "string" ? [botPersonId] : (botPersonId ?? []);
+  return new Set(ids.map((id) => id.trim()).filter(Boolean));
+}
+
 function resolveMentionFacts(params: {
   text: string;
   mentions?: Post["mentions"];
-  botPersonId?: string;
+  mentionTargetIds?: string[];
 }) {
   const textMentions = Array.from(params.text.matchAll(RC_TYPED_MENTION_RE));
   const explicitMentions = params.mentions ?? [];
   const hasAnyMention = textMentions.length > 0 || explicitMentions.length > 0;
-  const wasMentioned = params.botPersonId
-    ? textMentions.some((match) => match.groups?.id === params.botPersonId) ||
-      explicitMentions.some((mention) => mention.id === params.botPersonId)
-    : hasAnyMention;
+  const mentionTargetIds = normalizeMentionTargetIds(params.mentionTargetIds);
+  const isTarget = (id: string | undefined) => Boolean(id && mentionTargetIds.has(id));
+  const wasMentioned =
+    mentionTargetIds.size > 0
+      ? textMentions.some((match) => isTarget(match.groups?.id)) ||
+        explicitMentions.some((mention) => isTarget(mention.id))
+      : hasAnyMention;
   return { canDetectMention: true, wasMentioned, hasAnyMention };
 }
 
