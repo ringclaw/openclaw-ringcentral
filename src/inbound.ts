@@ -72,6 +72,7 @@ export interface InboundContext {
   channelRuntime?: unknown;
   tracker: ThreadParticipationTracker;
   markOwnPost?: (postId: string) => void;
+  markOwnText?: (groupId: string, text: string) => void;
   log?: (message: string) => void;
   reportAuthFailure?: (message: string) => void;
 }
@@ -124,8 +125,9 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
 
   // Skip the RingCentral *bot account*'s own posts when allowBots is false.
   // In conversationIdentity="user" mode, assistantPersonId is the owner — owner
-  // messages must still be admitted; outbound echoes are filtered via markOwnPost /
-  // ANSWER_START / ignoredTexts in the WebSocket monitor.
+  // messages must still be admitted; outbound echoes are filtered via markOwnText
+  // (before REST resolves) / markOwnPost / ANSWER_START / ignoredTexts in the
+  // WebSocket monitor.
   if (!account.config.allowBots && inCtx.botPersonId && senderId === inCtx.botPersonId) {
     return;
   }
@@ -358,6 +360,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     sourceThreadId: post.threadId,
     tracker,
     markOwnPost: inCtx.markOwnPost,
+    markOwnText: inCtx.markOwnText,
     log,
     reportAuthFailure: inCtx.reportAuthFailure,
   });
@@ -490,6 +493,7 @@ function createDispatcherOptions(params: {
   sourceThreadId?: string | number | null;
   tracker: ThreadParticipationTracker;
   markOwnPost?: (postId: string) => void;
+  markOwnText?: (groupId: string, text: string) => void;
   log: (message: string) => void;
   reportAuthFailure?: (message: string) => void;
 }) {
@@ -566,6 +570,7 @@ function createDispatcherOptions(params: {
         noThreadChannels: params.account.noThreadChannels,
         tracker: params.tracker,
         markOwnPost: params.markOwnPost,
+        markOwnText: params.markOwnText,
       },
     );
     if (newId) {
@@ -621,6 +626,7 @@ function createDispatcherOptions(params: {
           noThreadChannels: params.account.noThreadChannels,
           tracker: params.tracker,
           markOwnPost: params.markOwnPost,
+          markOwnText: params.markOwnText,
         });
       }
     },
@@ -701,6 +707,7 @@ async function sendReplyText(
     sourceThreadId?: string | number | null;
     tracker: ThreadParticipationTracker;
     markOwnPost?: (postId: string) => void;
+    markOwnText?: (groupId: string, text: string) => void;
   },
   text: string,
 ) {
@@ -715,6 +722,7 @@ async function sendReplyText(
     noThreadChannels: params.account.noThreadChannels,
     tracker: params.tracker,
     markOwnPost: params.markOwnPost,
+    markOwnText: params.markOwnText,
   });
 }
 

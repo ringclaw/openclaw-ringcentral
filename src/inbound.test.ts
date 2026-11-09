@@ -496,6 +496,38 @@ describe("handleInboundPost", () => {
     expect(runtime.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
+  it("marks outbound reply text before sendPost so user-identity websocket echoes can be dropped", async () => {
+    const runtime = makeRuntime();
+    const client = makeClient();
+    const markOwnText = vi.fn();
+    client.sendPost.mockImplementation(async () => {
+      expect(markOwnText).toHaveBeenCalledWith("g1", "skill saved");
+      return { id: "sent-1" };
+    });
+
+    await handleInboundPost({
+      post: makePost({
+        text: "![:Person](bot-ext) need the bot",
+        mentions: [{ id: "bot-ext", type: "Person" }],
+      }),
+      cfg: {},
+      botClient: client,
+      ownerClient: client,
+      account: dualUserAccount(),
+      botPersonId: "bot-person",
+      ownerPersonId: "owner",
+      assistantPersonId: "owner",
+      channelRuntime: runtime,
+      tracker: new ThreadParticipationTracker(),
+      markOwnText,
+    });
+
+    const dispatcherOptions =
+      runtime.reply.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0].dispatcherOptions;
+    await dispatcherOptions.deliver({ text: "skill saved" });
+    expect(client.sendPost).toHaveBeenCalled();
+  });
+
   it("treats tracked RingCentral thread ids as thread follow-ups without another mention", async () => {
     const runtime = makeRuntime();
     const tracker = new ThreadParticipationTracker();

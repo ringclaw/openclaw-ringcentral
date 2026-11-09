@@ -122,11 +122,17 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
           monitor.markOwnPost(postId);
         }
       };
+      const markOwnText = (groupId: string, text: string) => {
+        for (const monitor of state.monitors) {
+          monitor.markOwnText(groupId, text);
+        }
+      };
       const onMessage = (post: Parameters<typeof handleInboundPost>[0]["post"]) => {
-        if (seenInboundPosts.has(post.id)) {
+        const inboundId = String(post.id);
+        if (seenInboundPosts.has(inboundId)) {
           return;
         }
-        seenInboundPosts.add(post.id);
+        seenInboundPosts.add(inboundId);
         void handleInboundPost({
           post,
           cfg,
@@ -141,6 +147,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
           channelRuntime: ctx.channelRuntime,
           tracker: state.tracker,
           markOwnPost,
+          markOwnText,
           log: (message) => ctx.log?.info(message) ?? console.log(message),
           reportAuthFailure: (message) => {
             setStatus({ accountId, connected: false, lastError: message } as never);
@@ -260,6 +267,11 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
               monitor.markOwnPost(postId);
             }
           },
+          markOwnText: (groupId, text) => {
+            for (const monitor of state.monitors) {
+              monitor.markOwnText(groupId, text);
+            }
+          },
         });
         lastPostId = result?.postId ?? lastPostId;
       }
@@ -296,6 +308,11 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
           state.tracker.remember(postId);
           for (const monitor of state.monitors) {
             monitor.markOwnPost(postId);
+          }
+        },
+        markOwnText: (groupId, text) => {
+          for (const monitor of state.monitors) {
+            monitor.markOwnText(groupId, text);
           }
         },
       });

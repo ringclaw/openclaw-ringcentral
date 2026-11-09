@@ -23,15 +23,28 @@ const PING_INTERVAL = 30000;
 const PONG_TIMEOUT = 60000;
 const OWN_POST_TTL_MS = 300_000;
 
+export type InboundDropReason = "own-id" | "own-text" | "own-creator" | "answer-wrapper" | "ignored-text";
+
 export class RingCentralWebSocketMonitor {
   private readonly sentPosts = new Map<string, number>();
+  private readonly sentTexts = new Map<string, number>();
   private failures = 0;
 
   constructor(private readonly opts: MonitorOptions) {}
 
-  markOwnPost(postId: string | undefined | null): void {
-    if (postId) {
-      this.sentPosts.set(postId, Date.now());
+  markOwnPost(postId: string | number | undefined | null): void {
+    const id = coerceId(postId);
+    if (id) {
+      this.sentPosts.set(id, Date.now());
+    }
+  }
+
+  // Record the exact outbound body before the REST send resolves. Glip often
+  // pushes PostAdded on the WebSocket first, so id-only filtering races.
+  markOwnText(groupId: string | number | undefined | null, text: string | undefined | null): void {
+    const key = ownTextKey(groupId, text);
+    if (key) {
+      this.sentTexts.set(key, Date.now());
     }
   }
 
@@ -178,12 +191,20 @@ export class RingCentralWebSocketMonitor {
 
   private handlePost(post: Post, log: (...args: unknown[]) => void): void {
     pruneSentPosts(this.sentPosts);
-    if (!shouldProcessPost(post, {
+    pruneSentPosts(this.sentTexts);
+    const dropReason = inboundDropReason(post, {
       sentPosts: this.sentPosts,
+      sentTexts: this.sentTexts,
       ownCreatorId: this.opts.ownCreatorId,
       filterOwnCreator: this.opts.filterOwnCreator,
       ignoredTexts: this.opts.ignoredTexts,
-    })) {
+    });
+    if (dropReason) {
+      if (dropReason === "own-id" || dropReason === "own-text") {
+        log(
+          `[rc-monitor] dropped own echo (${dropReason}) chatId=${post.groupId} creatorId=${post.creatorId} postId=${post.id}`,
+        );
+      }
       return;
     }
     log(`[rc-monitor] received post chatId=${post.groupId} creatorId=${post.creatorId}`);
@@ -223,33 +244,81 @@ export function extractPostFromWsFrame(frame: unknown): Post | null {
   if (candidate.type && candidate.type !== "TextMessage") {
     return null;
   }
-  return typeof candidate.text === "string" ? candidate : null;
+  if (typeof candidate.text !== "string") {
+    return null;
+  }
+  const id = coerceId(candidate.id);
+  const groupId = coerceId(candidate.groupId);
+  if (!id || !groupId) {
+    return null;
+  }
+  return coercePostIds(candidate);
 }
 
 export function shouldProcessPost(
   post: Post,
   params: {
     sentPosts?: Map<string, number>;
+    sentTexts?: Map<string, number>;
     ownCreatorId?: string;
     filterOwnCreator?: boolean;
     ignoredTexts?: readonly string[];
   } = {},
 ): boolean {
-  if (params.sentPosts?.has(post.id)) {
-    return false;
+  return inboundDropReason(post, params) === null;
+}
+
+export function inboundDropReason(
+  post: Post,
+  params: {
+    sentPosts?: Map<string, number>;
+    sentTexts?: Map<string, number>;
+    ownCreatorId?: string;
+    filterOwnCreator?: boolean;
+    ignoredTexts?: readonly string[];
+  } = {},
+): InboundDropReason | null {
+  const postId = coerceId(post.id);
+  if (postId && params.sentPosts?.has(postId)) {
+    return "own-id";
   }
-  if (params.filterOwnCreator !== false && params.ownCreatorId && post.creatorId === params.ownCreatorId) {
-    return false;
+  const textKey = ownTextKey(post.groupId, post.text);
+  if (textKey && params.sentTexts?.has(textKey)) {
+    return "own-text";
+  }
+  if (
+    params.filterOwnCreator !== false &&
+    params.ownCreatorId &&
+    coerceId(post.creatorId) === coerceId(params.ownCreatorId)
+  ) {
+    return "own-creator";
   }
   const text = post.text ?? "";
   if (text.startsWith(ANSWER_START)) {
-    return false;
+    return "answer-wrapper";
   }
-  return !(params.ignoredTexts ?? []).includes(text);
+  if ((params.ignoredTexts ?? []).includes(text)) {
+    return "ignored-text";
+  }
+  return null;
 }
 
-export function markSentPost(sentPosts: Map<string, number>, postId: string): void {
-  sentPosts.set(postId, Date.now());
+export function markSentPost(sentPosts: Map<string, number>, postId: string | number): void {
+  const id = coerceId(postId);
+  if (id) {
+    sentPosts.set(id, Date.now());
+  }
+}
+
+export function markOwnText(
+  sentTexts: Map<string, number>,
+  groupId: string | number | undefined | null,
+  text: string | undefined | null,
+): void {
+  const key = ownTextKey(groupId, text);
+  if (key) {
+    sentTexts.set(key, Date.now());
+  }
 }
 
 function pruneSentPosts(sentPosts: Map<string, number>): void {
@@ -259,6 +328,36 @@ function pruneSentPosts(sentPosts: Map<string, number>): void {
       sentPosts.delete(id);
     }
   }
+}
+
+function ownTextKey(
+  groupId: string | number | undefined | null,
+  text: string | undefined | null,
+): string | null {
+  const chatId = coerceId(groupId);
+  if (!chatId || typeof text !== "string" || !text) {
+    return null;
+  }
+  return `${chatId}\0${text}`;
+}
+
+function coerceId(value: string | number | undefined | null): string | null {
+  if (value == null) {
+    return null;
+  }
+  const id = String(value).trim();
+  return id ? id : null;
+}
+
+function coercePostIds(post: Post): Post {
+  return {
+    ...post,
+    id: coerceId(post.id) ?? String(post.id),
+    groupId: coerceId(post.groupId) ?? String(post.groupId),
+    creatorId: coerceId(post.creatorId) ?? "",
+    parentPostId: coerceId(post.parentPostId) ?? undefined,
+    threadId: coerceId(post.threadId) ?? undefined,
+  };
 }
 
 export function isConnectionDetails(value: unknown): boolean {
