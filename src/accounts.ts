@@ -4,6 +4,7 @@ import type {
   ProcessingPlaceholderConfig,
   ResolvedAccount,
   ResolvedRingCentralOwnerCredentials,
+  RingCentralConversationIdentity,
   RingCentralDmPolicy,
   RingCentralGroupDmConfig,
   RingCentralGroupPolicy,
@@ -269,12 +270,24 @@ export function resolveAccount(
   const cfg = channelConfig ?? {};
   assertNoLegacyConfig(cfg);
   assertNoLegacyEnv(env);
+  const conversationIdentity = readPolicy<RingCentralConversationIdentity>(
+    cfg.conversationIdentity,
+    "RC_CONVERSATION_IDENTITY",
+    env,
+    "bot",
+    ["bot", "user"],
+  );
   const botToken = cfg.botToken ?? readEnv("RC_BOT_TOKEN", env) ?? "";
-  if (!botToken) {
-    throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
-  }
-
   const ownerCredentials = resolveOwnerCredentials(cfg, env);
+  if (conversationIdentity === "bot") {
+    if (!botToken) {
+      throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
+    }
+  } else if (!ownerCredentials) {
+    throw new Error(
+      'RingCentral conversationIdentity="user" requires ownerCredentials (or RC_USER_CLIENT_ID / RC_USER_CLIENT_SECRET / RC_USER_JWT_TOKEN).',
+    );
+  }
   const allowFrom = normalizeAllowFrom(
     cfg.allowFrom ?? readDelimitedEntries(undefined, "RC_ALLOW_FROM", env),
   );
@@ -308,6 +321,7 @@ export function resolveAccount(
     botToken,
     ownerCredentials,
     credentials: ownerCredentials,
+    conversationIdentity,
     server: cfg.server ?? readEnv("RC_SERVER_URL", env) ?? DEFAULT_SERVER,
     allowFrom,
     dangerouslyAllowEmailMatching: readBoolean(cfg.dangerouslyAllowEmailMatching, false, undefined, env),
@@ -336,7 +350,10 @@ export function isAccountConfigured(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const cfg = channelConfig ?? {};
-  return !!(cfg.botToken ?? readEnv("RC_BOT_TOKEN", env));
+  if (cfg.botToken ?? readEnv("RC_BOT_TOKEN", env)) {
+    return true;
+  }
+  return resolveOwnerCredentials(cfg, env) !== undefined;
 }
 
 export function hasOwnerCredentials(account: ResolvedAccount): boolean {

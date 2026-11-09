@@ -56,11 +56,16 @@ type ChannelRuntimeLike = {
 export interface InboundContext {
   post: Post;
   cfg: OpenClawConfig;
-  botClient: RingCentralClient;
+  botClient?: RingCentralClient;
   ownerClient?: RingCentralClient;
+  /** Primary client used for replies/typing. Defaults from conversationIdentity. */
+  sendClient?: RingCentralClient;
+  sendFallbackClient?: RingCentralClient;
   account: ResolvedAccount;
   botPersonId?: string;
   ownerPersonId?: string;
+  /** Person ID of the active conversation identity (bot or owner). */
+  assistantPersonId?: string;
   channelRuntime?: unknown;
   tracker: ThreadParticipationTracker;
   markOwnPost?: (postId: string) => void;
@@ -103,11 +108,20 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const chatId = post.groupId;
   const text = post.text ?? "";
   const senderId = post.creatorId;
-  const chat = await getChatSafe(botClient, chatId);
+  const readClient = botClient ?? ownerClient;
+  if (!readClient) {
+    throw new Error("RingCentral inbound handler requires a bot or owner client.");
+  }
+  const { sendClient, sendFallbackClient, assistantPersonId } = resolveSendClients(inCtx);
+  const chat = await getChatSafe(readClient, chatId);
   const surface = classifyChatSurface(chat, account, chatId);
   const chatType = surface.chatType;
-  const sender = await getPersonSafe(ownerClient ?? botClient, senderId);
+  const sender = await getPersonSafe(ownerClient ?? botClient ?? readClient, senderId);
 
+  // Skip the RingCentral *bot account*'s own posts when allowBots is false.
+  // In conversationIdentity="user" mode, assistantPersonId is the owner — owner
+  // messages must still be admitted; outbound echoes are filtered via markOwnPost /
+  // ANSWER_START / ignoredTexts in the WebSocket monitor.
   if (!account.config.allowBots && inCtx.botPersonId && senderId === inCtx.botPersonId) {
     return;
   }
@@ -124,10 +138,14 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     });
   }
 
+  // requireMention matches the Glip bot, not the send identity. In
+  // conversationIdentity="user" dual-account mode assistantPersonId is the
+  // owner, but @owner must not activate; @bot / botExtensionId must.
+  const mentionTargetIds = resolveActivationMentionIds(inCtx, assistantPersonId);
   const mentionFacts = resolveMentionFacts({
     text,
     mentions: post.mentions,
-    botPersonId: inCtx.botPersonId,
+    mentionTargetIds,
   });
   const routeDescriptors = buildRouteDescriptors({ account, chatId, surface });
   const surfaceConfig = surface.settings;
@@ -215,13 +233,13 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   // bot-sent post set used by resolveReplyTransport(replyToMode:"first").
   tracker.rememberThread(post.threadId ?? post.parentPostId ?? post.id);
 
-  const bodyForAgent = stripRcMentions(text, inCtx.botPersonId, {
+  const bodyForAgent = stripRcMentions(text, mentionTargetIds, {
     preserveNonBotMentions: chatType === "direct" && !!account.ownerCredentials,
   });
   const mediaPayload = await resolveInboundAttachmentsForAgent({
     attachments: post.attachments,
-    primaryClient: botClient,
-    fallbackClient: ownerClient,
+    primaryClient: botClient ?? ownerClient ?? readClient,
+    fallbackClient: ownerClient && botClient ? ownerClient : undefined,
     account,
     log,
   });
@@ -305,8 +323,8 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       ctx: context,
       cfg,
       dispatcherOptions: createDispatcherOptions({
-        botClient,
-        ownerClient,
+        sendClient,
+        sendFallbackClient,
         account,
         chatId,
         sourcePostId: post.id,
@@ -347,12 +365,14 @@ function isTrackedThreadFollowup(post: Post, tracker: ThreadParticipationTracker
 
 export function stripRcMentions(
   text: string,
-  botPersonId?: string,
+  botPersonId?: string | readonly string[],
   opts: { preserveNonBotMentions?: boolean } = {},
 ): string {
   if (!text) {
     return text;
   }
+  const mentionTargetIds = normalizeMentionTargetIds(botPersonId);
+  const isTarget = (id: string | undefined) => Boolean(id && mentionTargetIds.has(id));
   let stripped = text.trimStart();
   const leadingWhitespace = text.slice(0, text.length - stripped.length);
 
@@ -363,16 +383,16 @@ export function stripRcMentions(
       if (!match?.groups) {
         break;
       }
-      if (botPersonId && match.groups.id === botPersonId) {
+      if (isTarget(match.groups.id)) {
         addressed = true;
         stripped = stripped.slice(match[0].length).trimStart();
         continue;
       }
       break;
     }
-    if (botPersonId) {
+    if (mentionTargetIds.size > 0) {
       stripped = stripped.replace(RC_TYPED_MENTION_RE, (raw, _type, id) =>
-        id === botPersonId ? "" : raw,
+        isTarget(id) ? "" : raw,
       );
     }
     return addressed ? stripped.trim() : (leadingWhitespace + stripped).trimEnd() || text;
@@ -384,16 +404,52 @@ export function stripRcMentions(
     if (!match?.groups) {
       break;
     }
-    addressed ||= !botPersonId || match.groups.id === botPersonId;
+    addressed ||= mentionTargetIds.size === 0 || isTarget(match.groups.id);
     stripped = stripped.slice(match[0].length).trimStart();
   }
   stripped = stripped.replace(RC_TYPED_MENTION_RE, "").trim();
   return addressed ? stripped : (leadingWhitespace + stripped).trimEnd() || text;
 }
 
+function resolveSendClients(inCtx: InboundContext): {
+  sendClient: RingCentralClient;
+  sendFallbackClient?: RingCentralClient;
+  assistantPersonId?: string;
+} {
+  if (inCtx.sendClient) {
+    return {
+      sendClient: inCtx.sendClient,
+      sendFallbackClient: inCtx.sendFallbackClient,
+      assistantPersonId:
+        inCtx.assistantPersonId ??
+        (inCtx.account.conversationIdentity === "user" ? inCtx.ownerPersonId : inCtx.botPersonId),
+    };
+  }
+  if (inCtx.account.conversationIdentity === "user") {
+    if (!inCtx.ownerClient) {
+      throw new Error(
+        'RingCentral conversationIdentity="user" requires ownerCredentials (or RC_USER_* env vars).',
+      );
+    }
+    return {
+      sendClient: inCtx.ownerClient,
+      sendFallbackClient: inCtx.botClient,
+      assistantPersonId: inCtx.assistantPersonId ?? inCtx.ownerPersonId,
+    };
+  }
+  if (!inCtx.botClient) {
+    throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
+  }
+  return {
+    sendClient: inCtx.botClient,
+    sendFallbackClient: inCtx.ownerClient,
+    assistantPersonId: inCtx.assistantPersonId ?? inCtx.botPersonId,
+  };
+}
+
 function createDispatcherOptions(params: {
-  botClient: RingCentralClient;
-  ownerClient?: RingCentralClient;
+  sendClient: RingCentralClient;
+  sendFallbackClient?: RingCentralClient;
   account: ResolvedAccount;
   chatId: string;
   sourcePostId: string;
@@ -435,7 +491,7 @@ function createDispatcherOptions(params: {
       if (!idToEdit) {
         return;
       }
-      void updateMessage(params.botClient, params.chatId, idToEdit, delayedText, false).catch((err) => {
+      void updateMessage(params.sendClient, params.chatId, idToEdit, delayedText, false).catch((err) => {
         logTypingPostWarning(params.log, "failed to edit typing post", {
           chatId: params.chatId,
           postId: idToEdit,
@@ -464,11 +520,11 @@ function createDispatcherOptions(params: {
       return;
     }
     const newId = await sendTypingIndicator(
-      params.botClient,
+      params.sendClient,
       params.chatId,
       params.account.processingPlaceholder.initialText,
       {
-        fallbackClient: params.ownerClient,
+        fallbackClient: params.sendFallbackClient,
         replyToId: params.sourcePostId,
         threadId: params.sourceThreadId,
         replyToMode: params.account.replyToMode,
@@ -496,7 +552,7 @@ function createDispatcherOptions(params: {
     const idToDelete = typingPostId;
     typingPostId = undefined;
     const deleted = await deleteTypingPostWithRetry({
-      botClient: params.botClient,
+      client: params.sendClient,
       chatId: params.chatId,
       postId: idToDelete,
       log: params.log,
@@ -520,8 +576,8 @@ function createDispatcherOptions(params: {
       }
       if (payload.mediaUrl) {
         await sendMessage({
-          client: params.botClient,
-          fallbackClient: params.ownerClient,
+          client: params.sendClient,
+          fallbackClient: params.sendFallbackClient,
           chatId: params.chatId,
           mediaUrl: payload.mediaUrl,
           replyToId: params.sourcePostId,
@@ -541,14 +597,14 @@ function createDispatcherOptions(params: {
 }
 
 async function deleteTypingPostWithRetry(params: {
-  botClient: RingCentralClient;
+  client: RingCentralClient;
   chatId: string;
   postId: string;
   log: (message: string) => void;
 }): Promise<boolean> {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      await params.botClient.deletePost(params.chatId, params.postId);
+      await params.client.deletePost(params.chatId, params.postId);
       return true;
     } catch (err) {
       if (attempt === 1) {
@@ -599,8 +655,8 @@ function sleep(ms: number): Promise<void> {
 
 async function sendReplyText(
   params: {
-    botClient: RingCentralClient;
-    ownerClient?: RingCentralClient;
+    sendClient: RingCentralClient;
+    sendFallbackClient?: RingCentralClient;
     account: ResolvedAccount;
     chatId: string;
     sourcePostId: string;
@@ -611,8 +667,8 @@ async function sendReplyText(
   text: string,
 ) {
   await sendMessage({
-    client: params.botClient,
-    fallbackClient: params.ownerClient,
+    client: params.sendClient,
+    fallbackClient: params.sendFallbackClient,
     chatId: params.chatId,
     text,
     replyToId: params.sourcePostId,
@@ -694,18 +750,49 @@ function buildRouteDescriptors(params: {
   return routes;
 }
 
+function resolveActivationMentionIds(
+  inCtx: InboundContext,
+  assistantPersonId?: string,
+): string[] {
+  const ids = new Set<string>();
+  const add = (id?: string) => {
+    const trimmed = id?.trim();
+    if (trimmed) {
+      ids.add(trimmed);
+    }
+  };
+  add(inCtx.botPersonId);
+  add(inCtx.account.config.botExtensionId);
+  // Dual-account / bot present: never treat the owner send-identity as a mention.
+  if (ids.size > 0) {
+    return [...ids];
+  }
+  // Pure user mode (no bot token): the owner is the only addressable identity.
+  add(assistantPersonId);
+  add(inCtx.ownerPersonId);
+  return [...ids];
+}
+
+function normalizeMentionTargetIds(botPersonId?: string | readonly string[]): Set<string> {
+  const ids = typeof botPersonId === "string" ? [botPersonId] : (botPersonId ?? []);
+  return new Set(ids.map((id) => id.trim()).filter(Boolean));
+}
+
 function resolveMentionFacts(params: {
   text: string;
   mentions?: Post["mentions"];
-  botPersonId?: string;
+  mentionTargetIds?: string[];
 }) {
   const textMentions = Array.from(params.text.matchAll(RC_TYPED_MENTION_RE));
   const explicitMentions = params.mentions ?? [];
   const hasAnyMention = textMentions.length > 0 || explicitMentions.length > 0;
-  const wasMentioned = params.botPersonId
-    ? textMentions.some((match) => match.groups?.id === params.botPersonId) ||
-      explicitMentions.some((mention) => mention.id === params.botPersonId)
-    : hasAnyMention;
+  const mentionTargetIds = normalizeMentionTargetIds(params.mentionTargetIds);
+  const isTarget = (id: string | undefined) => Boolean(id && mentionTargetIds.has(id));
+  const wasMentioned =
+    mentionTargetIds.size > 0
+      ? textMentions.some((match) => isTarget(match.groups?.id)) ||
+        explicitMentions.some((mention) => isTarget(mention.id))
+      : hasAnyMention;
   return { canDetectMention: true, wasMentioned, hasAnyMention };
 }
 

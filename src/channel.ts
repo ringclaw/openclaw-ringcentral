@@ -69,17 +69,22 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
     isEnabled: (account: ResolvedAccount) => account.config.enabled !== false,
     isConfigured: (_account: ResolvedAccount, cfg: OpenClawConfig) => isAccountConfigured(getRcConfig(cfg)),
     unconfiguredReason: () =>
-      "Bot token not configured. Set botToken in config or RC_BOT_TOKEN.",
+      'RingCentral is not configured. Set botToken (or RC_BOT_TOKEN), or set conversationIdentity="user" with ownerCredentials.',
     hasConfiguredState: ({ cfg, env }) => isAccountConfigured(getRcConfig(cfg), env),
     describeAccount: (account) => ({
       accountId: "default",
       name: account.config.name ?? "RingCentral",
       enabled: account.config.enabled !== false,
-      configured: !!account.botToken,
-      statusState: account.botToken ? "configured" : "not configured",
+      configured: !!account.botToken || hasOwnerCredentials(account),
+      statusState: !!account.botToken || hasOwnerCredentials(account) ? "configured" : "not configured",
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
-      tokenSource: account.config.botToken ? "config" : "env:RC_BOT_TOKEN",
+      conversationIdentity: account.conversationIdentity,
+      tokenSource: account.botToken
+        ? account.config.botToken
+          ? "config"
+          : "env:RC_BOT_TOKEN"
+        : "none",
       credentialSource: hasOwnerCredentials(account) ? "owner credentials" : "none",
     }),
   },
@@ -88,10 +93,24 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
     startAccount: async (ctx: ChannelGatewayContext<ResolvedAccount>) => {
       const { account, cfg, abortSignal, setStatus, accountId } = ctx;
       const state = stateFor(accountId);
-      const botClient = createBotClient(account.server, account.botToken);
+      const botClient = account.botToken ? createBotClient(account.server, account.botToken) : undefined;
       const ownerClient = createOwnerClientFromAccount(account);
-      const botPersonId = account.config.botExtensionId ?? (await resolvePersonId(botClient));
+      if (!botClient && !ownerClient) {
+        throw new Error(
+          'RingCentral is not configured. Set botToken (or RC_BOT_TOKEN), or set conversationIdentity="user" with ownerCredentials.',
+        );
+      }
+      const botPersonId = botClient
+        ? account.config.botExtensionId ?? (await resolvePersonId(botClient))
+        : undefined;
       const ownerPersonId = ownerClient ? await resolvePersonId(ownerClient) : undefined;
+      const { sendClient, sendFallbackClient, assistantPersonId } = selectSendClients(
+        account,
+        botClient,
+        ownerClient,
+        botPersonId,
+        ownerPersonId,
+      );
       const ignoredTexts = [
         account.processingPlaceholder.initialText,
         account.processingPlaceholder.delayedText,
@@ -113,9 +132,12 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
           cfg,
           botClient,
           ownerClient,
+          sendClient,
+          sendFallbackClient,
           account,
           botPersonId,
           ownerPersonId,
+          assistantPersonId,
           channelRuntime: ctx.channelRuntime,
           tracker: state.tracker,
           markOwnPost,
@@ -124,35 +146,56 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
       };
 
       setStatus({ accountId, state: "connecting", statusState: "configured" } as never);
-      const botMonitor = new RingCentralWebSocketMonitor({
-        client: botClient,
-        ownCreatorId: botPersonId,
-        filterOwnCreator: true,
-        ignoredTexts,
-        abortSignal,
-        onConnected: () => {
-          setStatus({ accountId, connected: true, statusState: "linked" } as never);
-          ctx.log?.info("[ringcentral] bot websocket connected");
-        },
-        onDisconnected: (err) => {
-          setStatus({ accountId, connected: false, lastError: err?.message } as never);
-        },
-        onMessage,
-        log: (...args) => ctx.log?.info(args.map(String).join(" ")) ?? console.log(...args),
-      });
-      const monitors = [botMonitor];
+      const monitors: RingCentralWebSocketMonitor[] = [];
+      if (botClient) {
+        monitors.push(
+          new RingCentralWebSocketMonitor({
+            client: botClient,
+            ownCreatorId: botPersonId,
+            filterOwnCreator: true,
+            ignoredTexts,
+            abortSignal,
+            onConnected: () => {
+              setStatus({ accountId, connected: true, statusState: "linked" } as never);
+              ctx.log?.info("[ringcentral] bot websocket connected");
+            },
+            onDisconnected: (err) => {
+              setStatus({ accountId, connected: false, lastError: err?.message } as never);
+            },
+            onMessage,
+            log: (...args) => ctx.log?.info(args.map(String).join(" ")) ?? console.log(...args),
+          }),
+        );
+      }
       if (ownerClient) {
         monitors.push(
           new RingCentralWebSocketMonitor({
             client: ownerClient,
             ownCreatorId: ownerPersonId,
+            // Keep owner monitor open to self-posts so user-identity mode can
+            // reply when the owner messages their own Personal/DM surfaces.
             filterOwnCreator: false,
             ignoredTexts,
             abortSignal,
             onMessage,
-            onConnected: () => ctx.log?.info("[ringcentral] owner websocket connected"),
-            onDisconnected: (err) => ctx.log?.warn?.(`[ringcentral] owner websocket disconnected: ${err?.message ?? "unknown"}`),
-            log: (...args) => ctx.log?.debug?.(args.map(String).join(" ")) ?? undefined,
+            onConnected: () => {
+              if (!botClient) {
+                setStatus({ accountId, connected: true, statusState: "linked" } as never);
+              }
+              ctx.log?.info("[ringcentral] owner websocket connected");
+            },
+            onDisconnected: (err) => {
+              if (!botClient) {
+                setStatus({ accountId, connected: false, lastError: err?.message } as never);
+              }
+              ctx.log?.warn?.(
+                `[ringcentral] owner websocket disconnected: ${err?.message ?? "unknown"}`,
+              );
+            },
+            log: (...args) =>
+              botClient
+                ? (ctx.log?.debug?.(args.map(String).join(" ")) ?? undefined)
+                : (ctx.log?.info(args.map(String).join(" ")) ?? console.log(...args)),
           }),
         );
       }
@@ -170,11 +213,12 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
     textChunkLimit: DEFAULT_TEXT_CHUNK_LIMIT,
     sendText: async (outCtx: ChannelOutboundContext) => {
       const account = resolveAccount(getRcConfig(outCtx.cfg));
-      const botClient = createBotClient(account.server, account.botToken);
+      const botClient = account.botToken ? createBotClient(account.server, account.botToken) : undefined;
       const ownerClient = createOwnerClientFromAccount(account);
+      const { sendClient, sendFallbackClient } = selectSendClients(account, botClient, ownerClient);
       let chatId: string;
       try {
-        chatId = await resolveOutboundChatId(outCtx.to, botClient, ownerClient);
+        chatId = await resolveOutboundChatId(outCtx.to, sendClient, sendFallbackClient);
       } catch (err) {
         return {
           ok: false,
@@ -187,8 +231,8 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
       let lastPostId = "";
       for (const chunk of chunkText(outCtx.text ?? "", account.textChunkLimit ?? DEFAULT_TEXT_CHUNK_LIMIT)) {
         const result = await sendMessage({
-          client: botClient,
-          fallbackClient: ownerClient,
+          client: sendClient,
+          fallbackClient: sendFallbackClient,
           chatId,
           text: chunk,
           replyToId: outCtx.replyToId,
@@ -210,11 +254,12 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
     },
     sendMedia: async (outCtx: ChannelOutboundContext) => {
       const account = resolveAccount(getRcConfig(outCtx.cfg));
-      const botClient = createBotClient(account.server, account.botToken);
+      const botClient = account.botToken ? createBotClient(account.server, account.botToken) : undefined;
       const ownerClient = createOwnerClientFromAccount(account);
+      const { sendClient, sendFallbackClient } = selectSendClients(account, botClient, ownerClient);
       let chatId: string;
       try {
-        chatId = await resolveOutboundChatId(outCtx.to, botClient, ownerClient);
+        chatId = await resolveOutboundChatId(outCtx.to, sendClient, sendFallbackClient);
       } catch (err) {
         return {
           ok: false,
@@ -225,8 +270,8 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
       }
       const state = stateFor(outCtx.accountId ?? "default");
       const result = await sendMessage({
-        client: botClient,
-        fallbackClient: ownerClient,
+        client: sendClient,
+        fallbackClient: sendFallbackClient,
         chatId,
         mediaUrl: outCtx.mediaUrl,
         replyToId: outCtx.replyToId,
@@ -292,7 +337,7 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
   directory: {
     self: async ({ cfg }) => {
       const account = resolveAccount(getRcConfig(cfg));
-      const ext = await createBotClient(account.server, account.botToken).getExtensionInfo();
+      const ext = await createPreferredIdentityClient(account).getExtensionInfo();
       return { kind: "user", id: String(ext.id), name: ext.name, raw: ext };
     },
     listGroupsLive: async ({ cfg, limit }) => {
@@ -317,11 +362,18 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
   status: {
     probeAccount: async ({ account }) => {
       try {
-        const ext = await createBotClient(account.server, account.botToken).getExtensionInfo();
+        const primary = createPreferredIdentityClient(account);
+        const ext = await primary.getExtensionInfo();
         const owner = hasOwnerCredentials(account)
           ? await createOwnerClientFromAccount(account)?.getExtensionInfo().catch((err) => ({ error: String(err) }))
           : undefined;
-        return { ok: true, extensionId: ext.id, name: ext.name, owner };
+        return {
+          ok: true,
+          extensionId: ext.id,
+          name: ext.name,
+          conversationIdentity: account.conversationIdentity,
+          owner,
+        };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -330,12 +382,13 @@ export const ringcentralPlugin: ChannelPlugin<ResolvedAccount> = {
       accountId: "default",
       name: account.config.name ?? "RingCentral",
       enabled: account.config.enabled !== false,
-      configured: !!account.botToken,
+      configured: !!account.botToken || hasOwnerCredentials(account),
       statusState: runtime?.connected ? "linked" : "configured",
       connected: runtime?.connected,
       label: account.config.name ?? "RingCentral",
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
+      conversationIdentity: account.conversationIdentity,
       credentialSource: hasOwnerCredentials(account) ? "owner credentials" : "none",
     }) as never,
   },
@@ -364,13 +417,69 @@ function createOwnerClientFromAccount(account: ResolvedAccount): RingCentralClie
 }
 
 function createPreferredReadClient(account: ResolvedAccount): RingCentralClient {
-  return createOwnerClientFromAccount(account) ?? createBotClient(account.server, account.botToken);
+  return (
+    createOwnerClientFromAccount(account) ??
+    (account.botToken ? createBotClient(account.server, account.botToken) : undefined) ??
+    (() => {
+      throw new Error("RingCentral is not configured for read operations.");
+    })()
+  );
+}
+
+function createPreferredIdentityClient(account: ResolvedAccount): RingCentralClient {
+  if (account.conversationIdentity === "user") {
+    const owner = createOwnerClientFromAccount(account);
+    if (owner) {
+      return owner;
+    }
+  }
+  if (account.botToken) {
+    return createBotClient(account.server, account.botToken);
+  }
+  const owner = createOwnerClientFromAccount(account);
+  if (owner) {
+    return owner;
+  }
+  throw new Error("RingCentral is not configured.");
+}
+
+export function selectSendClients(
+  account: ResolvedAccount,
+  botClient: RingCentralClient | undefined,
+  ownerClient: RingCentralClient | undefined,
+  botPersonId?: string,
+  ownerPersonId?: string,
+): {
+  sendClient: RingCentralClient;
+  sendFallbackClient?: RingCentralClient;
+  assistantPersonId?: string;
+} {
+  if (account.conversationIdentity === "user") {
+    if (!ownerClient) {
+      throw new Error(
+        'RingCentral conversationIdentity="user" requires ownerCredentials (or RC_USER_* env vars).',
+      );
+    }
+    return {
+      sendClient: ownerClient,
+      sendFallbackClient: botClient,
+      assistantPersonId: ownerPersonId,
+    };
+  }
+  if (!botClient) {
+    throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
+  }
+  return {
+    sendClient: botClient,
+    sendFallbackClient: ownerClient,
+    assistantPersonId: botPersonId,
+  };
 }
 
 async function resolveOutboundChatId(
   target: string,
-  botClient: RingCentralClient,
-  ownerClient?: RingCentralClient,
+  primaryClient: RingCentralClient,
+  fallbackClient?: RingCentralClient,
 ): Promise<string> {
   const parsed = parseTarget(target);
   if (!parsed) {
@@ -382,10 +491,10 @@ async function resolveOutboundChatId(
     return parsed.id;
   }
   try {
-    return (await botClient.createOrFindDm([parsed.id])).id;
+    return (await primaryClient.createOrFindDm([parsed.id])).id;
   } catch (err) {
-    if (ownerClient) {
-      return (await ownerClient.createOrFindDm([parsed.id])).id;
+    if (fallbackClient) {
+      return (await fallbackClient.createOrFindDm([parsed.id])).id;
     }
     throw err;
   }

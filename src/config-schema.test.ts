@@ -12,11 +12,18 @@ describe("ringCentralConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts conversationIdentity enum values", () => {
+    expect(ringCentralConfigSchema.safeParse({ conversationIdentity: "bot" }).success).toBe(true);
+    expect(ringCentralConfigSchema.safeParse({ conversationIdentity: "user" }).success).toBe(true);
+    expect(ringCentralConfigSchema.safeParse({ conversationIdentity: "both" }).success).toBe(false);
+  });
+
   it("accepts full canonical config", () => {
     const result = ringCentralConfigSchema.safeParse({
       enabled: true,
       name: "My Bot",
       botToken: "bot-static-token",
+      conversationIdentity: "user",
       ownerCredentials: { clientId: "owner-cid", clientSecret: "owner-cs", jwt: "owner-jwt" },
       credentials: { clientId: "cid", clientSecret: "cs", jwt: "jwt-tok" },
       server: "https://platform.ringcentral.com",
