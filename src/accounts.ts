@@ -4,6 +4,7 @@ import type {
   ProcessingPlaceholderConfig,
   ResolvedAccount,
   ResolvedRingCentralOwnerCredentials,
+  RingCentralConversationIdentity,
   RingCentralDmPolicy,
   RingCentralGroupDmConfig,
   RingCentralGroupPolicy,
@@ -16,6 +17,8 @@ import type {
 export const DEFAULT_SERVER = "https://platform.ringcentral.com";
 export const DEFAULT_HISTORY_MESSAGE_LIMIT = 250;
 export const MAX_HISTORY_MESSAGE_LIMIT = 1000;
+export const DEFAULT_THREAD_HISTORY_LIMIT = 20;
+export const MAX_THREAD_HISTORY_LIMIT = 100;
 export const DEFAULT_ATTACHMENT_MAX_COUNT = 5;
 export const DEFAULT_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENT_MAX_COUNT = 20;
@@ -269,12 +272,24 @@ export function resolveAccount(
   const cfg = channelConfig ?? {};
   assertNoLegacyConfig(cfg);
   assertNoLegacyEnv(env);
+  const conversationIdentity = readPolicy<RingCentralConversationIdentity>(
+    cfg.conversationIdentity,
+    "RC_CONVERSATION_IDENTITY",
+    env,
+    "bot",
+    ["bot", "user"],
+  );
   const botToken = cfg.botToken ?? readEnv("RC_BOT_TOKEN", env) ?? "";
-  if (!botToken) {
-    throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
-  }
-
   const ownerCredentials = resolveOwnerCredentials(cfg, env);
+  if (conversationIdentity === "bot") {
+    if (!botToken) {
+      throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
+    }
+  } else if (!ownerCredentials) {
+    throw new Error(
+      'RingCentral conversationIdentity="user" requires ownerCredentials (or RC_USER_CLIENT_ID / RC_USER_CLIENT_SECRET / RC_USER_JWT_TOKEN).',
+    );
+  }
   const allowFrom = normalizeAllowFrom(
     cfg.allowFrom ?? readDelimitedEntries(undefined, "RC_ALLOW_FROM", env),
   );
@@ -301,6 +316,11 @@ export function resolveAccount(
     1,
     MAX_HISTORY_MESSAGE_LIMIT,
   );
+  const threadHistoryLimit = clampInteger(
+    readNumber(cfg.threadHistoryLimit, DEFAULT_THREAD_HISTORY_LIMIT, "RC_THREAD_HISTORY_LIMIT", env),
+    1,
+    MAX_THREAD_HISTORY_LIMIT,
+  );
   const requireMentionEnv = readEnv("RC_REQUIRE_MENTION", env);
   const requireMention = readBoolean(cfg.requireMention, true, "RC_REQUIRE_MENTION", env);
 
@@ -308,6 +328,7 @@ export function resolveAccount(
     botToken,
     ownerCredentials,
     credentials: ownerCredentials,
+    conversationIdentity,
     server: cfg.server ?? readEnv("RC_SERVER_URL", env) ?? DEFAULT_SERVER,
     allowFrom,
     dangerouslyAllowEmailMatching: readBoolean(cfg.dangerouslyAllowEmailMatching, false, undefined, env),
@@ -325,6 +346,7 @@ export function resolveAccount(
     attachments: resolveAttachmentDownloads(cfg, env),
     debugInboundMessages: readBoolean(cfg.debugInboundMessages, false, "RC_DEBUG_INBOUND_MESSAGES", env),
     historyMessageLimit,
+    threadHistoryLimit,
     homeChannel: cfg.homeChannel ?? readEnv("RC_HOME_CHANNEL", env),
     homeChannelName: cfg.homeChannelName ?? readEnv("RC_HOME_CHANNEL_NAME", env),
     config: { ...cfg, teams: resolveTeams(cfg, env) },
@@ -336,7 +358,10 @@ export function isAccountConfigured(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const cfg = channelConfig ?? {};
-  return !!(cfg.botToken ?? readEnv("RC_BOT_TOKEN", env));
+  if (cfg.botToken ?? readEnv("RC_BOT_TOKEN", env)) {
+    return true;
+  }
+  return resolveOwnerCredentials(cfg, env) !== undefined;
 }
 
 export function hasOwnerCredentials(account: ResolvedAccount): boolean {

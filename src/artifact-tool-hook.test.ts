@@ -81,4 +81,23 @@ describe("RingCentral artifact tool hook", () => {
 
     expect(result).toBeUndefined();
   });
+
+  it("strips :thread: suffix when deriving chat_id from sessionKey", () => {
+    const result = injectRingCentralArtifactToolChatId(
+      {
+        toolName: "ringcentral_create_note",
+        params: { title: "Note" },
+      },
+      {
+        sessionKey: "agent:main:ringcentral:channel:team-1:thread:root-99",
+      },
+    );
+
+    expect(result).toEqual({
+      params: {
+        title: "Note",
+        chat_id: "team-1",
+      },
+    });
+  });
 });

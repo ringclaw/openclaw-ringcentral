@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildWebSocketUrl,
   extractPostFromWsFrame,
+  inboundDropReason,
   isConnectionDetails,
   isSubscriptionConfirmation,
+  markOwnText,
   markSentPost,
   shouldProcessPost,
 } from "./monitor.js";
@@ -35,6 +37,33 @@ describe("extractPostFromWsFrame", () => {
   it("extracts valid array PostAdded TextMessage frames", () => {
     expect(extractPostFromWsFrame(makeWSEvent())).toEqual(
       expect.objectContaining({ id: "post-1", text: "Hello" }),
+    );
+  });
+
+  it("coerces numeric Glip ids to strings", () => {
+    expect(
+      extractPostFromWsFrame(
+        makeWSEvent({
+          body: {
+            id: 9001,
+            groupId: 144411459590,
+            type: "TextMessage",
+            text: "Hello",
+            creatorId: 4315035020,
+            parentPostId: 88,
+            threadId: 99,
+            creationTime: "2026-01-01T00:00:00Z",
+          },
+        }),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        id: "9001",
+        groupId: "144411459590",
+        creatorId: "4315035020",
+        parentPostId: "88",
+        threadId: "99",
+      }),
     );
   });
 
@@ -83,6 +112,26 @@ describe("shouldProcessPost", () => {
     expect(shouldProcessPost(post, { sentPosts: new Map([["post-1", Date.now()]]) })).toBe(false);
     expect(shouldProcessPost(post, { ownCreatorId: "user-1" })).toBe(false);
     expect(shouldProcessPost(post, { ownCreatorId: "user-1", filterOwnCreator: false })).toBe(true);
+  });
+
+  it("blocks own posts when REST returns a numeric id and the websocket echo is a string", () => {
+    const sentPosts = new Map<string, number>();
+    markSentPost(sentPosts, 9001);
+    expect(shouldProcessPost({ ...post, id: "9001" }, { sentPosts, filterOwnCreator: false })).toBe(false);
+    expect(inboundDropReason({ ...post, id: "9001" }, { sentPosts, filterOwnCreator: false })).toBe("own-id");
+  });
+
+  it("blocks websocket echoes by outbound text before the send id is known", () => {
+    const sentTexts = new Map<string, number>();
+    markOwnText(sentTexts, "chat-1", "Hello");
+    expect(shouldProcessPost(post, { sentTexts, filterOwnCreator: false })).toBe(false);
+    expect(inboundDropReason(post, { sentTexts, filterOwnCreator: false })).toBe("own-text");
+    expect(
+      shouldProcessPost(
+        { ...post, text: "a real owner follow-up" },
+        { sentTexts, ownCreatorId: "user-1", filterOwnCreator: false },
+      ),
+    ).toBe(true);
   });
 
   it("blocks answer wrappers and configured placeholder texts", () => {

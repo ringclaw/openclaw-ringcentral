@@ -9,6 +9,7 @@ import { RingCentralApiError, type RingCentralClient } from "./client.js";
 import { sendMessage, sendTypingIndicator, updateMessage } from "./send.js";
 import { RINGCENTRAL_CHANNEL_ID } from "./shared.js";
 import { buildChannelTarget, buildGroupTarget, buildTeamTarget, buildUserTarget } from "./targets.js";
+import { loadThreadContextText } from "./thread-context.js";
 import type { ThreadParticipationTracker } from "./threading.js";
 import type { Chat, PersonInfo, Post, ResolvedAccount, RingCentralGroupDmConfig, RingCentralTeamConfig } from "./types.js";
 
@@ -36,6 +37,7 @@ type ChatSurface =
       groupPolicy: "disabled" | "allowlist" | "open";
     };
 type ResolveAgentRoute = typeof import("openclaw/plugin-sdk/routing")["resolveAgentRoute"];
+type ResolveThreadSessionKeys = typeof import("openclaw/plugin-sdk/routing")["resolveThreadSessionKeys"];
 type FinalizeInboundContext =
   typeof import("openclaw/plugin-sdk/reply-runtime")["finalizeInboundContext"];
 type DispatchReplyWithBufferedBlockDispatcher =
@@ -46,6 +48,7 @@ const warnedDropChatIds = new Set<string>();
 type ChannelRuntimeLike = {
   routing?: {
     resolveAgentRoute?: ResolveAgentRoute;
+    resolveThreadSessionKeys?: ResolveThreadSessionKeys;
   };
   reply?: {
     finalizeInboundContext?: FinalizeInboundContext;
@@ -56,15 +59,22 @@ type ChannelRuntimeLike = {
 export interface InboundContext {
   post: Post;
   cfg: OpenClawConfig;
-  botClient: RingCentralClient;
+  botClient?: RingCentralClient;
   ownerClient?: RingCentralClient;
+  /** Primary client used for replies/typing. Defaults from conversationIdentity. */
+  sendClient?: RingCentralClient;
+  sendFallbackClient?: RingCentralClient;
   account: ResolvedAccount;
   botPersonId?: string;
   ownerPersonId?: string;
+  /** Person ID of the active conversation identity (bot or owner). */
+  assistantPersonId?: string;
   channelRuntime?: unknown;
   tracker: ThreadParticipationTracker;
   markOwnPost?: (postId: string) => void;
+  markOwnText?: (groupId: string, text: string) => void;
   log?: (message: string) => void;
+  reportAuthFailure?: (message: string) => void;
 }
 
 const identity = {
@@ -103,11 +113,21 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   const chatId = post.groupId;
   const text = post.text ?? "";
   const senderId = post.creatorId;
-  const chat = await getChatSafe(botClient, chatId);
+  const readClient = botClient ?? ownerClient;
+  if (!readClient) {
+    throw new Error("RingCentral inbound handler requires a bot or owner client.");
+  }
+  const { sendClient, sendFallbackClient, assistantPersonId } = resolveSendClients(inCtx);
+  const chat = await getChatSafe(readClient, chatId);
   const surface = classifyChatSurface(chat, account, chatId);
   const chatType = surface.chatType;
-  const sender = await getPersonSafe(ownerClient ?? botClient, senderId);
+  const sender = await getPersonSafe(ownerClient ?? botClient ?? readClient, senderId);
 
+  // Skip the RingCentral *bot account*'s own posts when allowBots is false.
+  // In conversationIdentity="user" mode, assistantPersonId is the owner — owner
+  // messages must still be admitted; outbound echoes are filtered via markOwnText
+  // (before REST resolves) / markOwnPost / ANSWER_START / ignoredTexts in the
+  // WebSocket monitor.
   if (!account.config.allowBots && inCtx.botPersonId && senderId === inCtx.botPersonId) {
     return;
   }
@@ -124,10 +144,14 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     });
   }
 
+  // requireMention matches the Glip bot, not the send identity. In
+  // conversationIdentity="user" dual-account mode assistantPersonId is the
+  // owner, but @owner must not activate; @bot / botExtensionId must.
+  const mentionTargetIds = resolveActivationMentionIds(inCtx, assistantPersonId);
   const mentionFacts = resolveMentionFacts({
     text,
     mentions: post.mentions,
-    botPersonId: inCtx.botPersonId,
+    mentionTargetIds,
   });
   const routeDescriptors = buildRouteDescriptors({ account, chatId, surface });
   const surfaceConfig = surface.settings;
@@ -215,13 +239,29 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
   // bot-sent post set used by resolveReplyTransport(replyToMode:"first").
   tracker.rememberThread(post.threadId ?? post.parentPostId ?? post.id);
 
-  const bodyForAgent = stripRcMentions(text, inCtx.botPersonId, {
+  const currentBody = stripRcMentions(text, mentionTargetIds, {
     preserveNonBotMentions: chatType === "direct" && !!account.ownerCredentials,
   });
+  const effectiveThreadId = post.threadId ?? post.parentPostId;
+  let bodyForAgent = currentBody;
+  if (effectiveThreadId) {
+    const threadClient = ownerClient ?? botClient ?? sendClient;
+    const threadHistory = await loadThreadContextText({
+      client: threadClient,
+      chatId,
+      threadId: String(effectiveThreadId),
+      limit: account.threadHistoryLimit,
+      excludePostId: post.id,
+      log,
+    });
+    if (threadHistory) {
+      bodyForAgent = `[RingCentral thread context]\n${threadHistory}\n\n${currentBody}`;
+    }
+  }
   const mediaPayload = await resolveInboundAttachmentsForAgent({
     attachments: post.attachments,
-    primaryClient: botClient,
-    fallbackClient: ownerClient,
+    primaryClient: botClient ?? ownerClient ?? readClient,
+    fallbackClient: ownerClient && botClient ? ownerClient : undefined,
     account,
     log,
   });
@@ -230,19 +270,26 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     kind: chatType,
     id: chatType === "direct" ? senderId : chatId,
   };
-  const route =
-    runtime.routing?.resolveAgentRoute?.({
-      cfg,
-      channel: RINGCENTRAL_CHANNEL_ID,
-      accountId: "default",
-      peer,
-    }) ??
-    (await import("openclaw/plugin-sdk/routing")).resolveAgentRoute({
-      cfg,
-      channel: RINGCENTRAL_CHANNEL_ID,
-      accountId: "default",
-      peer,
-    });
+  const routingSdk =
+    runtime.routing?.resolveAgentRoute && runtime.routing?.resolveThreadSessionKeys
+      ? null
+      : await import("openclaw/plugin-sdk/routing");
+  const resolveAgentRoute = runtime.routing?.resolveAgentRoute ?? routingSdk!.resolveAgentRoute;
+  const resolveThreadSessionKeys =
+    runtime.routing?.resolveThreadSessionKeys ?? routingSdk!.resolveThreadSessionKeys;
+  const route = resolveAgentRoute({
+    cfg,
+    channel: RINGCENTRAL_CHANNEL_ID,
+    accountId: "default",
+    peer,
+  });
+  const sessionKey = effectiveThreadId
+    ? resolveThreadSessionKeys({
+        baseSessionKey: route.sessionKey,
+        threadId: String(effectiveThreadId),
+        parentSessionKey: route.sessionKey,
+      }).sessionKey
+    : route.sessionKey;
   const target = buildInboundTarget({ surface, chatId, senderId });
   const fallbackReplyRuntime =
     runtime.reply?.finalizeInboundContext && runtime.reply?.dispatchReplyWithBufferedBlockDispatcher
@@ -254,14 +301,14 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     runtime.reply?.dispatchReplyWithBufferedBlockDispatcher ??
     fallbackReplyRuntime!.dispatchReplyWithBufferedBlockDispatcher;
   const context = finalizeInboundContext({
-    Body: bodyForAgent,
+    Body: currentBody,
     BodyForAgent: bodyForAgent,
     RawBody: text,
-    CommandBody: bodyForAgent,
-    BodyForCommands: bodyForAgent,
+    CommandBody: currentBody,
+    BodyForCommands: currentBody,
     From: target,
     To: target,
-    SessionKey: route.sessionKey,
+    SessionKey: sessionKey,
     AccountId: route.accountId ?? "default",
     MessageSid: post.id,
     MessageSidFull: post.id,
@@ -289,7 +336,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       postId: post.id,
       parentPostId: post.parentPostId,
       threadId: post.threadId,
-      routeSessionKey: route.sessionKey,
+      routeSessionKey: sessionKey,
     });
   }, DISPATCH_START_WARN_MS);
   dispatchWarnTimer.unref?.();
@@ -298,30 +345,38 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
     postId: post.id,
     parentPostId: post.parentPostId,
     threadId: post.threadId,
-    routeSessionKey: route.sessionKey,
+    routeSessionKey: sessionKey,
+  });
+  // Start the processing placeholder as soon as dispatch begins. OpenClaw group
+  // typingMode=message only fires onReplyStart when renderable text appears, so
+  // approval waits / tool calls would otherwise show no thinking indicator.
+  // Keep onReplyStart wired below; typingPostId guards against duplicates.
+  const dispatcherOptions = createDispatcherOptions({
+    sendClient,
+    sendFallbackClient,
+    account,
+    chatId,
+    sourcePostId: post.id,
+    sourceThreadId: post.threadId,
+    tracker,
+    markOwnPost: inCtx.markOwnPost,
+    markOwnText: inCtx.markOwnText,
+    log,
+    reportAuthFailure: inCtx.reportAuthFailure,
   });
   try {
+    await dispatcherOptions.onReplyStart();
     await dispatchReplyWithBufferedBlockDispatcher({
       ctx: context,
       cfg,
-      dispatcherOptions: createDispatcherOptions({
-        botClient,
-        ownerClient,
-        account,
-        chatId,
-        sourcePostId: post.id,
-        sourceThreadId: post.threadId,
-        tracker,
-        markOwnPost: inCtx.markOwnPost,
-        log,
-      }),
+      dispatcherOptions,
     });
     logInboundDispatchDiagnostic(log, "complete", {
       chatId,
       postId: post.id,
       parentPostId: post.parentPostId,
       threadId: post.threadId,
-      routeSessionKey: route.sessionKey,
+      routeSessionKey: sessionKey,
     });
   } catch (err) {
     logInboundDispatchDiagnostic(log, "failed", {
@@ -329,7 +384,7 @@ export async function handleInboundPost(inCtx: InboundContext): Promise<void> {
       postId: post.id,
       parentPostId: post.parentPostId,
       threadId: post.threadId,
-      routeSessionKey: route.sessionKey,
+      routeSessionKey: sessionKey,
       error: formatTypingPostError(err),
     });
     throw err;
@@ -347,12 +402,14 @@ function isTrackedThreadFollowup(post: Post, tracker: ThreadParticipationTracker
 
 export function stripRcMentions(
   text: string,
-  botPersonId?: string,
+  botPersonId?: string | readonly string[],
   opts: { preserveNonBotMentions?: boolean } = {},
 ): string {
   if (!text) {
     return text;
   }
+  const mentionTargetIds = normalizeMentionTargetIds(botPersonId);
+  const isTarget = (id: string | undefined) => Boolean(id && mentionTargetIds.has(id));
   let stripped = text.trimStart();
   const leadingWhitespace = text.slice(0, text.length - stripped.length);
 
@@ -363,16 +420,16 @@ export function stripRcMentions(
       if (!match?.groups) {
         break;
       }
-      if (botPersonId && match.groups.id === botPersonId) {
+      if (isTarget(match.groups.id)) {
         addressed = true;
         stripped = stripped.slice(match[0].length).trimStart();
         continue;
       }
       break;
     }
-    if (botPersonId) {
+    if (mentionTargetIds.size > 0) {
       stripped = stripped.replace(RC_TYPED_MENTION_RE, (raw, _type, id) =>
-        id === botPersonId ? "" : raw,
+        isTarget(id) ? "" : raw,
       );
     }
     return addressed ? stripped.trim() : (leadingWhitespace + stripped).trimEnd() || text;
@@ -384,23 +441,61 @@ export function stripRcMentions(
     if (!match?.groups) {
       break;
     }
-    addressed ||= !botPersonId || match.groups.id === botPersonId;
+    addressed ||= mentionTargetIds.size === 0 || isTarget(match.groups.id);
     stripped = stripped.slice(match[0].length).trimStart();
   }
   stripped = stripped.replace(RC_TYPED_MENTION_RE, "").trim();
   return addressed ? stripped : (leadingWhitespace + stripped).trimEnd() || text;
 }
 
+function resolveSendClients(inCtx: InboundContext): {
+  sendClient: RingCentralClient;
+  sendFallbackClient?: RingCentralClient;
+  assistantPersonId?: string;
+} {
+  if (inCtx.sendClient) {
+    return {
+      sendClient: inCtx.sendClient,
+      sendFallbackClient: inCtx.sendFallbackClient,
+      assistantPersonId:
+        inCtx.assistantPersonId ??
+        (inCtx.account.conversationIdentity === "user" ? inCtx.ownerPersonId : inCtx.botPersonId),
+    };
+  }
+  if (inCtx.account.conversationIdentity === "user") {
+    if (!inCtx.ownerClient) {
+      throw new Error(
+        'RingCentral conversationIdentity="user" requires ownerCredentials (or RC_USER_* env vars).',
+      );
+    }
+    return {
+      sendClient: inCtx.ownerClient,
+      sendFallbackClient: inCtx.botClient,
+      assistantPersonId: inCtx.assistantPersonId ?? inCtx.ownerPersonId,
+    };
+  }
+  if (!inCtx.botClient) {
+    throw new Error("RingCentral bot token not configured. Set botToken in config or RC_BOT_TOKEN.");
+  }
+  return {
+    sendClient: inCtx.botClient,
+    sendFallbackClient: inCtx.ownerClient,
+    assistantPersonId: inCtx.assistantPersonId ?? inCtx.botPersonId,
+  };
+}
+
 function createDispatcherOptions(params: {
-  botClient: RingCentralClient;
-  ownerClient?: RingCentralClient;
+  sendClient: RingCentralClient;
+  sendFallbackClient?: RingCentralClient;
   account: ResolvedAccount;
   chatId: string;
   sourcePostId: string;
   sourceThreadId?: string | number | null;
   tracker: ThreadParticipationTracker;
   markOwnPost?: (postId: string) => void;
+  markOwnText?: (groupId: string, text: string) => void;
   log: (message: string) => void;
+  reportAuthFailure?: (message: string) => void;
 }) {
   // RingCentral has no native typing API, so this channel uses one temporary
   // message as a typing indicator while OpenClaw's TypingController owns the
@@ -435,7 +530,7 @@ function createDispatcherOptions(params: {
       if (!idToEdit) {
         return;
       }
-      void updateMessage(params.botClient, params.chatId, idToEdit, delayedText, false).catch((err) => {
+      void updateMessage(params.sendClient, params.chatId, idToEdit, delayedText, false).catch((err) => {
         logTypingPostWarning(params.log, "failed to edit typing post", {
           chatId: params.chatId,
           postId: idToEdit,
@@ -464,17 +559,18 @@ function createDispatcherOptions(params: {
       return;
     }
     const newId = await sendTypingIndicator(
-      params.botClient,
+      params.sendClient,
       params.chatId,
       params.account.processingPlaceholder.initialText,
       {
-        fallbackClient: params.ownerClient,
+        fallbackClient: params.sendFallbackClient,
         replyToId: params.sourcePostId,
         threadId: params.sourceThreadId,
         replyToMode: params.account.replyToMode,
         noThreadChannels: params.account.noThreadChannels,
         tracker: params.tracker,
         markOwnPost: params.markOwnPost,
+        markOwnText: params.markOwnText,
       },
     );
     if (newId) {
@@ -496,7 +592,7 @@ function createDispatcherOptions(params: {
     const idToDelete = typingPostId;
     typingPostId = undefined;
     const deleted = await deleteTypingPostWithRetry({
-      botClient: params.botClient,
+      client: params.sendClient,
       chatId: params.chatId,
       postId: idToDelete,
       log: params.log,
@@ -520,8 +616,8 @@ function createDispatcherOptions(params: {
       }
       if (payload.mediaUrl) {
         await sendMessage({
-          client: params.botClient,
-          fallbackClient: params.ownerClient,
+          client: params.sendClient,
+          fallbackClient: params.sendFallbackClient,
           chatId: params.chatId,
           mediaUrl: payload.mediaUrl,
           replyToId: params.sourcePostId,
@@ -530,25 +626,29 @@ function createDispatcherOptions(params: {
           noThreadChannels: params.account.noThreadChannels,
           tracker: params.tracker,
           markOwnPost: params.markOwnPost,
+          markOwnText: params.markOwnText,
         });
       }
     },
     onError: (err: unknown, info: { kind: string }) => {
       void clearTypingPost();
       console.error(`[ringcentral] ${info.kind} reply error:`, err);
+      if (err instanceof RingCentralApiError && err.status === 401) {
+        params.reportAuthFailure?.(err.message);
+      }
     },
   };
 }
 
 async function deleteTypingPostWithRetry(params: {
-  botClient: RingCentralClient;
+  client: RingCentralClient;
   chatId: string;
   postId: string;
   log: (message: string) => void;
 }): Promise<boolean> {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      await params.botClient.deletePost(params.chatId, params.postId);
+      await params.client.deletePost(params.chatId, params.postId);
       return true;
     } catch (err) {
       if (attempt === 1) {
@@ -599,20 +699,21 @@ function sleep(ms: number): Promise<void> {
 
 async function sendReplyText(
   params: {
-    botClient: RingCentralClient;
-    ownerClient?: RingCentralClient;
+    sendClient: RingCentralClient;
+    sendFallbackClient?: RingCentralClient;
     account: ResolvedAccount;
     chatId: string;
     sourcePostId: string;
     sourceThreadId?: string | number | null;
     tracker: ThreadParticipationTracker;
     markOwnPost?: (postId: string) => void;
+    markOwnText?: (groupId: string, text: string) => void;
   },
   text: string,
 ) {
   await sendMessage({
-    client: params.botClient,
-    fallbackClient: params.ownerClient,
+    client: params.sendClient,
+    fallbackClient: params.sendFallbackClient,
     chatId: params.chatId,
     text,
     replyToId: params.sourcePostId,
@@ -621,6 +722,7 @@ async function sendReplyText(
     noThreadChannels: params.account.noThreadChannels,
     tracker: params.tracker,
     markOwnPost: params.markOwnPost,
+    markOwnText: params.markOwnText,
   });
 }
 
@@ -647,7 +749,10 @@ function buildRouteDescriptors(params: {
     }
     routes.push({
       id: `ringcentral:group-dm:${params.chatId}`,
-      configured: !!params.surface.settings,
+      // An enabled Group DM policy is always a configured route. Otherwise
+      // OpenClaw drops the descriptor before evaluating its deny decision,
+      // which lets an unlisted Group DM fall through to sender auth.
+      configured: true,
       matched: true,
       allowed: !!params.surface.settings && params.surface.settings.allow !== false,
       blockReason: "group dm not allowlisted",
@@ -694,18 +799,49 @@ function buildRouteDescriptors(params: {
   return routes;
 }
 
+function resolveActivationMentionIds(
+  inCtx: InboundContext,
+  assistantPersonId?: string,
+): string[] {
+  const ids = new Set<string>();
+  const add = (id?: string) => {
+    const trimmed = id?.trim();
+    if (trimmed) {
+      ids.add(trimmed);
+    }
+  };
+  add(inCtx.botPersonId);
+  add(inCtx.account.config.botExtensionId);
+  // Dual-account / bot present: never treat the owner send-identity as a mention.
+  if (ids.size > 0) {
+    return [...ids];
+  }
+  // Pure user mode (no bot token): the owner is the only addressable identity.
+  add(assistantPersonId);
+  add(inCtx.ownerPersonId);
+  return [...ids];
+}
+
+function normalizeMentionTargetIds(botPersonId?: string | readonly string[]): Set<string> {
+  const ids = typeof botPersonId === "string" ? [botPersonId] : (botPersonId ?? []);
+  return new Set(ids.map((id) => id.trim()).filter(Boolean));
+}
+
 function resolveMentionFacts(params: {
   text: string;
   mentions?: Post["mentions"];
-  botPersonId?: string;
+  mentionTargetIds?: string[];
 }) {
   const textMentions = Array.from(params.text.matchAll(RC_TYPED_MENTION_RE));
   const explicitMentions = params.mentions ?? [];
   const hasAnyMention = textMentions.length > 0 || explicitMentions.length > 0;
-  const wasMentioned = params.botPersonId
-    ? textMentions.some((match) => match.groups?.id === params.botPersonId) ||
-      explicitMentions.some((mention) => mention.id === params.botPersonId)
-    : hasAnyMention;
+  const mentionTargetIds = normalizeMentionTargetIds(params.mentionTargetIds);
+  const isTarget = (id: string | undefined) => Boolean(id && mentionTargetIds.has(id));
+  const wasMentioned =
+    mentionTargetIds.size > 0
+      ? textMentions.some((match) => isTarget(match.groups?.id)) ||
+        explicitMentions.some((mention) => isTarget(mention.id))
+      : hasAnyMention;
   return { canDetectMention: true, wasMentioned, hasAnyMention };
 }
 
@@ -887,9 +1023,21 @@ function classifyChatSurface(
     kind: "group-dm",
     chatType: "group",
     targetKind: "group",
-    settings: account.groupDmChannels[chatId],
+    settings: resolveGroupDmSettings(account, chatId),
     groupPolicy: account.groupDmEnabled ? "allowlist" : "disabled",
   };
+}
+
+function resolveGroupDmSettings(
+  account: ResolvedAccount,
+  chatId: string,
+): RingCentralGroupDmConfig | undefined {
+  const defaults = account.groupDmChannels["*"];
+  const explicit = account.groupDmChannels[chatId];
+  if (!defaults) {
+    return explicit;
+  }
+  return explicit ? { ...defaults, ...explicit } : defaults;
 }
 
 function resolveTeamSettings(

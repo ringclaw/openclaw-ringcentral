@@ -114,6 +114,20 @@ describe("sendMessage", () => {
     const result = await sendMessage({ client, chatId: "c1" });
     expect(result).toBeNull();
   });
+
+  it("marks outbound text before the REST send resolves so websocket echoes can be dropped", async () => {
+    const client = createMockClient();
+    const markOwnText = vi.fn();
+    (client as any).sendPost.mockImplementation(async () => {
+      expect(markOwnText).toHaveBeenCalledWith("c1", "hello");
+      return { id: "post1", text: "hello", groupId: "c1", type: "", creatorId: "", creationTime: "" };
+    });
+
+    await expect(sendMessage({ client, chatId: "c1", text: "hello", markOwnText })).resolves.toMatchObject({
+      postId: "post1",
+    });
+    expect((client as any).sendPost).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("sendTypingIndicator", () => {

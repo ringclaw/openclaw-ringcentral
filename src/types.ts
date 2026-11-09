@@ -190,6 +190,7 @@ export interface ResolvedRingCentralOwnerCredentials {
 }
 
 export type RingCentralReplyToMode = "off" | "first" | "all";
+export type RingCentralConversationIdentity = "bot" | "user";
 
 export interface ProcessingPlaceholderConfig {
   enabled?: boolean;
@@ -228,6 +229,8 @@ export interface RingCentralConfig {
   ownerCredentials?: RingCentralOwnerCredentials;
   /** @deprecated Use ownerCredentials. */
   credentials?: RingCentralOwnerCredentials;
+  /** Which account identity sends conversation replies. Default: "bot". */
+  conversationIdentity?: RingCentralConversationIdentity;
   server?: string;
   botExtensionId?: string;
   selfOnly?: boolean;
@@ -247,6 +250,7 @@ export interface RingCentralConfig {
   attachments?: AttachmentDownloadConfig;
   debugInboundMessages?: boolean;
   historyMessageLimit?: number;
+  threadHistoryLimit?: number;
   homeChannel?: string;
   homeChannelName?: string;
   requireMention?: boolean;
@@ -268,6 +272,7 @@ export interface ResolvedAccount {
   ownerCredentials?: ResolvedRingCentralOwnerCredentials;
   /** @deprecated Use ownerCredentials. */
   credentials?: ResolvedRingCentralOwnerCredentials;
+  conversationIdentity: RingCentralConversationIdentity;
   server: string;
   allowFrom: string[];
   dangerouslyAllowEmailMatching: boolean;
@@ -285,6 +290,7 @@ export interface ResolvedAccount {
   attachments: Required<AttachmentDownloadConfig>;
   debugInboundMessages: boolean;
   historyMessageLimit: number;
+  threadHistoryLimit: number;
   homeChannel?: string;
   homeChannelName?: string;
   config: RingCentralConfig;

@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { getRcConfig, hasOwnerCredentials, resolveAccount } from "./accounts.js";
 import { createOwnerClient } from "./client.js";
 import { extractChatId, parseTarget } from "./targets.js";
+import { formatPosts } from "./thread-context.js";
 import type { PersonInfo, Post } from "./types.js";
 
 type HistoryTargetType = "auto" | "chat" | "person";
@@ -158,19 +159,6 @@ async function findPerson(
     result.records[0] ??
     null
   );
-}
-
-function formatPosts(posts: Post[]): string {
-  return posts
-    .slice()
-    .reverse()
-    .map((post) => {
-      const attachments = post.attachments?.length
-        ? ` attachments=${post.attachments.map((item) => item.name ?? item.type).join(",")}`
-        : "";
-      return `[${post.creationTime ?? "unknown time"}] ${post.creatorId || "unknown"}: ${post.text || "(empty)"}${attachments}`;
-    })
-    .join("\n");
 }
 
 function formatPersonName(person: PersonInfo): string | undefined {

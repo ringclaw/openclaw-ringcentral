@@ -17,6 +17,7 @@ export interface SendOptions {
   noThreadChannels?: readonly string[];
   tracker?: ThreadParticipationTracker;
   markOwnPost?: (postId: string) => void;
+  markOwnText?: (groupId: string, text: string) => void;
   convertMarkdown?: boolean;
 }
 
@@ -42,6 +43,7 @@ export async function sendMessage(opts: SendOptions): Promise<{ postId: string; 
     noThreadChannels: opts.noThreadChannels,
     tracker: opts.tracker,
   });
+  opts.markOwnText?.(opts.chatId, finalText);
   const post = await sendPostWithFallback(opts, finalText, transport);
   opts.tracker?.remember(post.id, threadIdForParticipation(post, transport));
   opts.markOwnPost?.(post.id);
@@ -144,6 +146,7 @@ export async function sendTypingIndicator(
     noThreadChannels?: readonly string[];
     tracker?: ThreadParticipationTracker;
     markOwnPost?: (postId: string) => void;
+    markOwnText?: (groupId: string, text: string) => void;
   } = {},
 ): Promise<string | undefined> {
   try {
@@ -159,6 +162,7 @@ export async function sendTypingIndicator(
       noThreadChannels: opts.noThreadChannels,
       tracker: opts.tracker,
       markOwnPost: opts.markOwnPost,
+      markOwnText: opts.markOwnText,
     });
     return result?.postId;
   } catch {

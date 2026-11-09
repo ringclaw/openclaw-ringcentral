@@ -73,6 +73,7 @@ export class RingCentralClient {
   private accessToken?: string;
   private accessTokenExpiresAt = 0;
   private refreshPromise?: Promise<string>;
+  private tokenGeneration = 0;
 
   lastStatus: number | null = null;
 
@@ -125,7 +126,53 @@ export class RingCentralClient {
     const data = (await resp.json()) as TokenResponse;
     this.accessToken = data.access_token;
     this.accessTokenExpiresAt = Date.now() + data.expires_in * 1000;
+    this.tokenGeneration += 1;
     return this.accessToken;
+  }
+
+  private invalidateAccessToken(): void {
+    this.accessToken = undefined;
+    this.accessTokenExpiresAt = 0;
+  }
+
+  private async reauthAfter(staleGeneration: number): Promise<string> {
+    if (this.tokenGeneration === staleGeneration) {
+      this.invalidateAccessToken();
+    }
+    return this.getToken();
+  }
+
+  private async fetchWithRateLimit(execute: () => Promise<Response>): Promise<Response> {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      const resp = await execute();
+      this.lastStatus = resp.status;
+      if (resp.status === 429 && attempt < this.maxRetries) {
+        await sleep(RingCentralClient.parseRetryAfter(resp.headers.get("Retry-After") ?? null));
+        continue;
+      }
+      return resp;
+    }
+    throw new Error("RingCentral API retry budget exhausted");
+  }
+
+  // JWT access tokens can be revoked server-side before local expiry. One
+  // reauth retry is enough; bot static tokens cannot be refreshed.
+  private async authorizedFetch(execute: (token: string) => Promise<Response>): Promise<Response> {
+    let token = await this.getToken();
+    let generation = this.tokenGeneration;
+    for (let authAttempt = 0; authAttempt < 2; authAttempt++) {
+      const resp = await this.fetchWithRateLimit(() => execute(token));
+      if (resp.status !== 401 || this.botToken || authAttempt === 1) {
+        return resp;
+      }
+      const body = await resp.text();
+      if (!isInvalidAccessTokenBody(body)) {
+        throw new RingCentralApiError(401, body);
+      }
+      token = await this.reauthAfter(generation);
+      generation = this.tokenGeneration;
+    }
+    throw new Error("RingCentral API authorization retry budget exhausted");
   }
 
   private static encodeId(value: string): string {
@@ -154,45 +201,37 @@ export class RingCentralClient {
     body?: RequestBody,
     contentType?: string,
   ): Promise<T> {
-    const token = await this.getToken();
     const url = `${this.serverUrl}${path}`;
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-    };
+    const extraHeaders: Record<string, string> = {};
     let reqBody: BodyInit | undefined;
     if (body !== undefined) {
       if (body instanceof Uint8Array) {
-        headers["Content-Type"] = contentType ?? "application/octet-stream";
+        extraHeaders["Content-Type"] = contentType ?? "application/octet-stream";
         reqBody = body as unknown as BodyInit;
       } else if (typeof body === "string") {
-        headers["Content-Type"] = contentType ?? "text/plain";
+        extraHeaders["Content-Type"] = contentType ?? "text/plain";
         reqBody = body;
       } else {
-        headers["Content-Type"] = contentType ?? "application/json";
+        extraHeaders["Content-Type"] = contentType ?? "application/json";
         reqBody = JSON.stringify(body);
       }
     }
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      const resp = await fetch(url, { method, headers, body: reqBody });
-      this.lastStatus = resp.status;
-      if (resp.status === 429 && attempt < this.maxRetries) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, RingCentralClient.parseRetryAfter(resp.headers.get("Retry-After"))),
-        );
-        continue;
-      }
-      if (!resp.ok) {
-        throw new RingCentralApiError(resp.status, await resp.text());
-      }
-      if (resp.status === 204) {
-        return undefined as T;
-      }
-      const text = await resp.text();
-      return (text ? JSON.parse(text) : undefined) as T;
+    const resp = await this.authorizedFetch((token) =>
+      fetch(url, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, ...extraHeaders },
+        body: reqBody,
+      }),
+    );
+    if (!resp.ok) {
+      throw new RingCentralApiError(resp.status, await resp.text());
     }
-
-    throw new Error(`RingCentral API retry budget exhausted for ${method} ${path}`);
+    if (resp.status === 204) {
+      return undefined as T;
+    }
+    const text = await resp.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
 
   async downloadAttachment(opts: DownloadAttachmentOptions): Promise<DownloadedAttachment> {
@@ -200,44 +239,33 @@ export class RingCentralClient {
     if (!/^https?:\/\//i.test(uri)) {
       throw new Error("RingCentral attachment URI must be HTTP(S)");
     }
-    const token = await this.getToken();
-    const headers = {
-      Authorization: `Bearer ${token}`,
-    };
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      const resp = await fetch(uri, { method: "GET", headers });
-      this.lastStatus = resp.status;
-      if (resp.status === 429 && attempt < this.maxRetries) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, RingCentralClient.parseRetryAfter(resp.headers.get("Retry-After"))),
-        );
-        continue;
-      }
-      if (!resp.ok) {
-        throw new RingCentralApiError(resp.status, await resp.text(), "RingCentral attachment download failed");
-      }
-      const buffer = await readResponseWithLimit(resp, opts.maxBytes, {
-        chunkTimeoutMs: 30_000,
-        onOverflow: ({ size, maxBytes }) =>
-          new Error(`RingCentral attachment too large: ${size} bytes (limit: ${maxBytes} bytes)`),
-      });
-      const fileName = normalizeAttachmentFileName(opts.fileName);
-      const contentType =
-        normalizeMimeType(opts.contentType) ??
-        normalizeMimeType(resp.headers.get("Content-Type")) ??
-        (await detectMime({ buffer, filePath: fileName })) ??
-        mimeTypeFromFilePath(fileName) ??
-        "application/octet-stream";
-      return {
-        buffer,
-        contentType,
-        fileName,
-        size: buffer.byteLength,
-      };
+    const resp = await this.authorizedFetch((token) =>
+      fetch(uri, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
+    if (!resp.ok) {
+      throw new RingCentralApiError(resp.status, await resp.text(), "RingCentral attachment download failed");
     }
-
-    throw new Error("RingCentral attachment retry budget exhausted");
+    const buffer = await readResponseWithLimit(resp, opts.maxBytes, {
+      chunkTimeoutMs: 30_000,
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`RingCentral attachment too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+    });
+    const fileName = normalizeAttachmentFileName(opts.fileName);
+    const contentType =
+      normalizeMimeType(opts.contentType) ??
+      normalizeMimeType(resp.headers.get("Content-Type")) ??
+      (await detectMime({ buffer, filePath: fileName })) ??
+      mimeTypeFromFilePath(fileName) ??
+      "application/octet-stream";
+    return {
+      buffer,
+      contentType,
+      fileName,
+      size: buffer.byteLength,
+    };
   }
 
   async createWebSocketToken(): Promise<WSTokenResponse> {
@@ -285,6 +313,21 @@ export class RingCentralClient {
       "GET",
       `/restapi/v1.0/glip/groups/${RingCentralClient.encodeId(chatId)}/posts?recordCount=${Math.trunc(recordCount)}`,
     );
+  }
+
+  async listThreadPosts(threadId: string, recordCount = 50): Promise<PaginatedRecords<Post>> {
+    const count = Math.trunc(recordCount);
+    try {
+      return await this.request(
+        "GET",
+        `/team-messaging/v1/threads/${RingCentralClient.encodeId(threadId)}/posts?recordCount=${count}`,
+      );
+    } catch {
+      return this.request(
+        "GET",
+        `/restapi/v1.0/glip/threads/${RingCentralClient.encodeId(threadId)}/posts?recordCount=${count}`,
+      );
+    }
   }
 
   async uploadFile(
@@ -429,6 +472,25 @@ function normalizeAttachmentFileName(value: string | undefined): string {
   return trimmed.replace(/[\0\r\n]+/g, " ").trim() || "attachment";
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isInvalidAccessTokenBody(body: string): boolean {
+  return /TokenInvalid|OAU-213/.test(body);
+}
+
+const ownerClientCache = new Map<string, RingCentralClient>();
+
+function ownerClientCacheKey(
+  serverUrl: string,
+  clientId: string,
+  clientSecret: string,
+  jwt: string,
+): string {
+  return `${serverUrl.replace(/\/$/, "")}\0${clientId}\0${clientSecret}\0${jwt}`;
+}
+
 export function createBotClient(serverUrl: string, botToken: string): RingCentralClient {
   return new RingCentralClient({ serverUrl, botToken });
 }
@@ -439,10 +501,21 @@ export function createOwnerClient(
   clientSecret: string,
   jwt: string,
 ): RingCentralClient {
-  return new RingCentralClient({
+  const key = ownerClientCacheKey(serverUrl, clientId, clientSecret, jwt);
+  const cached = ownerClientCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const client = new RingCentralClient({
     serverUrl,
     ownerCredentials: { clientId, clientSecret, jwt },
   });
+  ownerClientCache.set(key, client);
+  return client;
+}
+
+export function clearCachedOwnerClients(): void {
+  ownerClientCache.clear();
 }
 
 /** @deprecated Use createOwnerClient. */

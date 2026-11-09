@@ -93,11 +93,17 @@
     "botToken": {
       "label": "Bot Token",
       "placeholder": "Bot static token from RingCentral Developer Portal",
+      "help": "Required when conversationIdentity is bot (default). Optional when conversationIdentity is user.",
       "sensitive": true
+    },
+    "conversationIdentity": {
+      "label": "Conversation Identity",
+      "help": "Which account sends conversation replies: bot (default) or user (owner JWT identity).",
+      "advanced": true
     },
     "ownerCredentials": {
       "label": "Owner Credentials (optional)",
-      "help": "Optional owner JWT credentials for recent history and Home-confirmed note/calendar operations.",
+      "help": "Owner JWT credentials for user-identity replies, recent history, and Home-confirmed note/calendar operations. Required when conversationIdentity is user.",
       "advanced": true
     },
     "ownerCredentials.clientId": {
@@ -157,6 +163,11 @@
     },
     "historyMessageLimit": {
       "label": "History Message Limit",
+      "advanced": true
+    },
+    "threadHistoryLimit": {
+      "label": "Thread History Limit",
+      "help": "Number of recent thread posts injected into inbound agent context. Default 20, max 100.",
       "advanced": true
     },
     "homeChannel": {
@@ -292,7 +303,12 @@
       },
       "botToken": {
         "type": "string",
-        "description": "Bot static token (required)"
+        "description": "Bot static token. Required for conversationIdentity=bot (default); optional for conversationIdentity=user."
+      },
+      "conversationIdentity": {
+        "type": "string",
+        "enum": ["bot", "user"],
+        "description": "Which account sends conversation replies. Default: bot."
       },
       "ownerCredentials": {
         "type": "object",
@@ -397,6 +413,11 @@
         "type": "integer",
         "minimum": 1,
         "maximum": 1000
+      },
+      "threadHistoryLimit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100
       },
       "homeChannel": {
         "type": "string"
@@ -565,7 +586,12 @@
           },
           "botToken": {
             "type": "string",
-            "description": "Bot static token (required)"
+            "description": "Bot static token. Required for conversationIdentity=bot (default); optional for conversationIdentity=user."
+          },
+          "conversationIdentity": {
+            "type": "string",
+            "enum": ["bot", "user"],
+            "description": "Which account sends conversation replies. Default: bot."
           },
           "ownerCredentials": {
             "type": "object",
@@ -670,6 +696,11 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1000
+          },
+          "threadHistoryLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           },
           "homeChannel": {
             "type": "string"
@@ -819,11 +850,17 @@
         "botToken": {
           "label": "Bot Token",
           "placeholder": "Bot static token from RingCentral Developer Portal",
+          "help": "Required when conversationIdentity is bot (default). Optional when conversationIdentity is user.",
           "sensitive": true
+        },
+        "conversationIdentity": {
+          "label": "Conversation Identity",
+          "help": "Which account sends conversation replies: bot (default) or user (owner JWT identity).",
+          "advanced": true
         },
         "ownerCredentials": {
           "label": "Owner Credentials (optional)",
-          "help": "Optional owner JWT credentials for recent history and Home-confirmed note/calendar operations.",
+          "help": "Owner JWT credentials for user-identity replies, recent history, and Home-confirmed note/calendar operations. Required when conversationIdentity is user.",
           "advanced": true
         },
         "ownerCredentials.clientId": {
@@ -883,6 +920,11 @@
         },
         "historyMessageLimit": {
           "label": "History Message Limit",
+          "advanced": true
+        },
+        "threadHistoryLimit": {
+          "label": "Thread History Limit",
+          "help": "Number of recent thread posts injected into inbound agent context. Default 20, max 100.",
           "advanced": true
         },
         "homeChannel": {

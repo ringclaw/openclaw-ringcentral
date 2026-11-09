@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRingCentralHistoryTool } from "./history-tool.js";
+import { clearCachedOwnerClients } from "./client.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -22,6 +23,7 @@ beforeEach(() => {
     }
   }
   mockFetch.mockReset();
+  clearCachedOwnerClients();
 });
 
 afterEach(() => {

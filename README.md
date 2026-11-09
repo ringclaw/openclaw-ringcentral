@@ -185,6 +185,67 @@ This is enough for paired DMs and bot-authenticated sends:
 }
 ```
 
+### Conversation Identity (bot / user)
+
+By default replies are sent as the RingCentral bot (`conversationIdentity: "bot"`).
+Set `conversationIdentity: "user"` to send conversation replies as the owner JWT
+account instead (the pre-rewrite personal-account experience).
+
+DM/Team allowlists (`dmPolicy`, `allowFrom`, `groupPolicy`, `teams`,
+`dm.groupChannels`) work the same in both modes.
+
+Pure user-identity config (no bot token):
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "enabled": true,
+      "conversationIdentity": "user",
+      "ownerCredentials": {
+        "clientId": "owner-app-client-id",
+        "clientSecret": "owner-app-client-secret",
+        "jwt": "owner-jwt-token"
+      },
+      "dmPolicy": "allowlist",
+      "allowFrom": ["sender-person-id"],
+      "groupPolicy": "allowlist",
+      "teams": {
+        "123456789": { "allow": true, "requireMention": true }
+      }
+    }
+  }
+}
+```
+
+Dual-account config (bot still receives traffic; owner sends replies):
+
+```json
+{
+  "channels": {
+    "ringcentral": {
+      "enabled": true,
+      "conversationIdentity": "user",
+      "botToken": "your-bot-static-token",
+      "ownerCredentials": {
+        "clientId": "owner-app-client-id",
+        "clientSecret": "owner-app-client-secret",
+        "jwt": "owner-jwt-token"
+      }
+    }
+  }
+}
+```
+
+In dual-account `user` mode, bot-token failures during send are still attempted
+as a fallback. Adaptive Card tools continue to require a bot token.
+
+`requireMention` still matches the RingCentral bot (`botPersonId` /
+`botExtensionId`, including Glip `![:Person](id)` / `post.mentions`). It does
+**not** treat an `@` of the owner JWT person as an activation. Replies continue
+to send as the owner. Pure user-identity configs with no bot token keep matching
+the owner, the only addressable identity.
+
 ### DM Allowlist
 
 ```json
@@ -277,6 +338,13 @@ group DMs:
 `replyToMode` can be `off`, `first`, or `all`. When
 `threadRequireMention=false`, replies inside a thread where the bot already
 participated can activate the bot without a new mention.
+
+Threaded replies use a separate OpenClaw session
+(`...:channel|{group}:{chatId}:thread:{threadId}`) so multiple threads in the
+same Team can run in parallel, each with its own thinking placeholder and final
+reply. Unthreaded timeline messages continue to share the chat-level session.
+Inbound thread messages also receive recent posts from that thread in
+`BodyForAgent` (see `threadHistoryLimit`).
 
 ### Attachments And Processing Placeholder
 
@@ -417,7 +485,8 @@ ignored.
 
 | Variable | Description |
 | --- | --- |
-| `RC_BOT_TOKEN` | Bot static token |
+| `RC_BOT_TOKEN` | Bot static token (required for `conversationIdentity=bot`) |
+| `RC_CONVERSATION_IDENTITY` | `bot` or `user`; default `bot` |
 | `RC_SERVER_URL` | API server URL, default `https://platform.ringcentral.com` |
 | `RC_USER_CLIENT_ID` | Owner REST API app client ID |
 | `RC_USER_CLIENT_SECRET` | Owner REST API app client secret |
@@ -440,6 +509,7 @@ ignored.
 | `RC_ATTACHMENT_MAX_COUNT` | Max attachments per inbound message, default `5` |
 | `RC_ATTACHMENT_MAX_BYTES` | Max bytes per downloaded attachment, default `5242880` |
 | `RC_HISTORY_MESSAGE_LIMIT` | Default history record count, max `1000` |
+| `RC_THREAD_HISTORY_LIMIT` | Recent thread posts injected into inbound context, default `20`, max `100` |
 | `RC_HOME_CHANNEL` | Default Home chat for history/artifact tools and owner confirmations |
 | `RC_HOME_CHANNEL_NAME` | Display name for the Home chat |
 
@@ -447,6 +517,7 @@ ignored.
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `conversationIdentity` | `bot` | Send conversation replies as `bot` or owner `user` identity |
 | `dmPolicy` | `pairing` | Direct message handling: `disabled`, `allowlist`, `pairing`, or `open` |
 | `allowFrom` | `[]` | Stable RingCentral person IDs allowed in DMs |
 | `dangerouslyAllowEmailMatching` | `false` | Match `allowFrom` against email aliases |
@@ -455,6 +526,7 @@ ignored.
 | `teams."*"` | none | Defaults only; not an allowlist entry |
 | `dm.groupEnabled` | `false` | Enable explicit RingCentral Group DM conversations |
 | `dm.groupChannels.<chatId>.allow` | `true` when present | Enable an explicit group DM |
+| `dm.groupChannels."*"` | none | Optional defaults for Group DMs; use `{ "allow": false }` for explicit default-deny |
 | `requireMention` | `true` | Global Team/Everyone mention gate |
 | `threadRequireMention` | `true` | Require mention in thread follow-ups |
 | `replyToMode` | `first` | Threading behavior for replies: `off`, `first`, or `all` |
@@ -464,6 +536,7 @@ ignored.
 | `allowBots` | `false` | Allow bot-authored inbound messages |
 | `botExtensionId` | auto-detected | Bot person ID for mention detection |
 | `historyMessageLimit` | `250` | Default history record count, max `1000` |
+| `threadHistoryLimit` | `20` | Recent thread posts injected into inbound agent context, max `100` |
 | `homeChannel` | none | Default Home chat for history/artifact tools and owner confirmations |
 
 ### Legacy Migration Errors

@@ -6,6 +6,7 @@ import {
   RINGCENTRAL_ARTIFACT_TOOL_NAMES,
 } from "./artifact-tools.js";
 import { __setRingCentralRuntimeForTest } from "./runtime.js";
+import { clearCachedOwnerClients } from "./client.js";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -58,6 +59,7 @@ function findTool(config: unknown, name: string) {
 
 beforeEach(() => {
   mockFetch.mockReset();
+  clearCachedOwnerClients();
   __testing.pendingConfirmations.clear();
   __setRingCentralRuntimeForTest(null);
   vi.unstubAllEnvs();
